@@ -11,7 +11,16 @@ vi.mock("../job-status", () => ({
   markFailed: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../modules/import/chunk-embed.service", () => ({
+  chunkAndEmbedStory: vi.fn().mockResolvedValue({
+    chaptersProcessed: 1,
+    chunksCreated: 2,
+    skipped: 0,
+  }),
+}));
+
 import { markCompleted, markFailed, markStarted } from "../job-status";
+import { chunkAndEmbedStory } from "../../modules/import/chunk-embed.service";
 
 describe("ImportProcessor", () => {
   let prisma: {
@@ -105,7 +114,7 @@ describe("ImportProcessor", () => {
     );
   });
 
-  it("chunk_embed is a completed stub", async () => {
+  it("chunk_embed chunks and embeds story chapters", async () => {
     const job = {
       id: "job_embed",
       name: "chunk_embed",
@@ -114,10 +123,19 @@ describe("ImportProcessor", () => {
 
     await processor.process(job);
 
+    expect(chunkAndEmbedStory).toHaveBeenCalledWith(
+      prisma,
+      "story_1",
+      "job_embed",
+    );
     expect(markCompleted).toHaveBeenCalledWith(
       prisma,
       "job_embed",
-      expect.objectContaining({ stub: true, storyId: "story_1" }),
+      expect.objectContaining({
+        storyId: "story_1",
+        chaptersProcessed: 1,
+        chunksCreated: 2,
+      }),
     );
   });
 

@@ -17,6 +17,9 @@ import {
   fetchUrlText,
 } from "../../modules/import/parsers/url-fetch";
 import {
+  chunkAndEmbedStory,
+} from "../../modules/import/chunk-embed.service";
+import {
   estimateWordCount,
   hashContent,
 } from "../../modules/import/import.service";
@@ -48,8 +51,7 @@ type ChunkEmbedPayload = {
  *
  * Re-import policy (MVP): **replace-all** — deletes existing chapters for the
  * story, then inserts the newly parsed set with sequential numbers.
- * `chunk_embed` is enqueued after a successful parse; the handler is a stub
- * until Task 6 implements real chunking/embeddings.
+ * `chunk_embed` chunks chapter text and stores pgvector embeddings.
  */
 @Injectable()
 @Processor(IMPORT_Q)
@@ -81,7 +83,7 @@ export class ImportProcessor extends WorkerHost {
           await this.handleFetchUrl(jobId, job.data as FetchUrlPayload);
           break;
         case "chunk_embed":
-          await this.handleChunkEmbedStub(jobId, job.data as ChunkEmbedPayload);
+          await this.handleChunkEmbed(jobId, job.data as ChunkEmbedPayload);
           break;
         default:
           throw new Error(`Unsupported import job type: ${job.name}`);
@@ -148,15 +150,23 @@ export class ImportProcessor extends WorkerHost {
     });
   }
 
-  /** Stub until Task 6 — job is enqueued and marked completed. */
-  private async handleChunkEmbedStub(
+  private async handleChunkEmbed(
     jobId: string,
     payload: ChunkEmbedPayload,
   ): Promise<void> {
+    if (!payload.storyId) {
+      throw new Error("chunk_embed requires storyId");
+    }
+
+    const result = await chunkAndEmbedStory(
+      this.prisma,
+      payload.storyId,
+      jobId,
+    );
+
     await markCompleted(this.prisma, jobId, {
-      stub: true,
       storyId: payload.storyId,
-      message: "chunk_embed deferred to Task 6",
+      ...result,
     });
   }
 
