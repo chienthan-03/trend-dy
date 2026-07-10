@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "./modules/auth/auth.module";
+import { ImportModule } from "./modules/import/import.module";
 import { JobsModule } from "./modules/jobs/jobs.module";
 import { ProjectsModule } from "./modules/projects/projects.module";
 import { SourcesModule } from "./modules/sources/sources.module";
@@ -16,6 +17,7 @@ import { QueueModule } from "./queue/queue.module";
     ProjectsModule,
     SourcesModule,
     StoriesModule,
+    ImportModule,
   ],
 })
 export class AppModule {}

@@ -3,17 +3,14 @@ import { Module } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { Processor, WorkerHost } from "@nestjs/bullmq";
 import type { Job } from "bullmq";
+import { ImportModule } from "../modules/import/import.module";
+import { JobsModule } from "../modules/jobs/jobs.module";
+import { PrismaModule } from "../prisma/prisma.module";
 import { QueueModule } from "../queue/queue.module";
 import { QUEUE_NAMES } from "../queue/queues";
+import { ImportProcessor } from "./processors/import.processor";
 
-const [IMPORT_Q, UNDERSTAND_Q, GENERATE_Q, ASSET_Q, DISCOVERY_Q] = QUEUE_NAMES;
-
-@Processor(IMPORT_Q)
-class ImportNoopProcessor extends WorkerHost {
-  async process(_job: Job): Promise<void> {
-    // noop — real import processor lands in a later task
-  }
-}
+const [, UNDERSTAND_Q, GENERATE_Q, ASSET_Q, DISCOVERY_Q] = QUEUE_NAMES;
 
 @Processor(UNDERSTAND_Q)
 class UnderstandNoopProcessor extends WorkerHost {
@@ -44,9 +41,9 @@ class DiscoveryNoopProcessor extends WorkerHost {
 }
 
 @Module({
-  imports: [QueueModule],
+  imports: [QueueModule, PrismaModule, JobsModule, ImportModule],
   providers: [
-    ImportNoopProcessor,
+    ImportProcessor,
     UnderstandNoopProcessor,
     GenerateNoopProcessor,
     AssetNoopProcessor,
@@ -59,7 +56,7 @@ const bootstrap = async () => {
   const app = await NestFactory.createApplicationContext(WorkerModule);
   app.enableShutdownHooks();
   console.log(
-    `Worker started — noop processors registered for ${QUEUE_NAMES.join(", ")}`,
+    `Worker started — ImportProcessor + noop processors for ${QUEUE_NAMES.join(", ")}`,
   );
 };
 
