@@ -9,6 +9,7 @@ import { PromptsModule } from "./modules/prompts/prompts.module";
 import { SourcesModule } from "./modules/sources/sources.module";
 import { StoriesModule } from "./modules/stories/stories.module";
 import { UnderstandModule } from "./modules/understand/understand.module";
+import { ViralModule } from "./modules/viral/viral.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { QueueModule } from "./queue/queue.module";
 
@@ -26,6 +27,7 @@ import { QueueModule } from "./queue/queue.module";
     PromptsModule,
     GenerateModule,
     AssetsModule,
+    ViralModule,
   ],
 })
 export class AppModule {}
