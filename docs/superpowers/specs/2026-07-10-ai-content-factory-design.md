@@ -1,9 +1,9 @@
 # AI Content Factory — PRD + Technical Design Document
 
-**Status:** Approved for implementation planning  
-**Date:** 2026-07-10  
+**Status:** Draft revision — Douyin viral ranking added to early scope (pending re-approval)  
+**Date:** 2026-07-10 (rev. Douyin discovery)  
 **Audience:** Engineering, AI, and product team building the internal studio tool  
-**Post-read action:** Implement the MVP modular monolith against this spec without re-opening architecture decisions until the 6-month evaluation gates.
+**Post-read action:** Implement the MVP modular monolith against this spec without re-opening architecture decisions until the 6-month evaluation gates — except Douyin connector details, which are intentionally adapter-scoped.
 
 ---
 
@@ -13,8 +13,10 @@
 |---|---|
 | Product model | Single-tenant internal tool for one creative studio |
 | Output language | Vietnamese (primary) |
-| MVP content | Web Novel, text-first |
-| Content sources | MVP: manual upload + single licensed URL import. RSS/feed sync: 3-month roadmap |
+| MVP content | Web Novel, text-first **+ Douyin viral ranking discovery** |
+| Content sources | (1) Manual upload + single licensed URL import for novels (2) **Full-auto Douyin ranking crawl (metadata)** (3) RSS/feed sync: 3-month roadmap |
+| Douyin acquisition | Full-auto crawl of Douyin ranking/hot lists — **studio accepts platform ToS and legal risk** |
+| Douyin use in MVP | Trend intelligence only: ranking metadata, captions, stats — **not** auto re-upload / pirate full videos |
 | Review policy | Soft review — outputs usable at `status=ready`; optional status transitions only |
 | Target scale (12 months) | ~5–10 titles/month, ~50–100 chapters/week |
 | MVP outputs | Storytelling + packaging + light video assets (text-only, no render) |
@@ -23,10 +25,17 @@
 **MVP storytelling outputs:** chapter summary, arc summary, narration script, video outline  
 **MVP packaging outputs:** titles, thumbnail text, description, tags, 3-second hook  
 **MVP light assets (from script):** voice script (text), SRT cues, scene list, banner text, export zip  
-**MVP discovery scope:** register sources manually + store metadata/`license_status`; **no** automated RSS polling until month 3  
-**Explicitly out of MVP:** OCR, ASR, TTS audio render, Neo4j, multi-tenant SaaS, Movie/Anime/Motion Comic pipelines, auto-publish to YouTube, scheduled RSS sync
+**MVP discovery scope:**
+- Manual source register + `license_status` for novel sources
+- **DouyinRankingAdapter:** scheduled full-auto crawl of configured ranking boards → `viral_items`
+- Viral items feed Discovery UI + optional “inspire packaging / topic suggest” for novel production
+- **No** automated RSS polling until month 3
 
-**Target genres (full catalog vision):** Movie Recap, Anime Recap, Manhwa Recap, Manhua Recap, Motion Comic, Web Novel, Regression, Apocalypse, System, Cultivation, Fantasy, Zombie, Survival — only Web Novel is in MVP; genre packs land on the 6-month roadmap.
+**Explicitly out of MVP:** bulk download of Douyin media for republishing, OCR, ASR on Douyin video (month 3+ and only with cleared rights), TTS audio render, Neo4j, multi-tenant SaaS, Movie/Anime/Motion Comic pipelines, auto-publish to YouTube/Douyin
+
+**Legal posture (non-negotiable in product copy):** Ranking crawl may violate Douyin Terms of Service and can create copyright exposure if media is reused. Spec stores **public ranking metadata** for internal editorial research. Any download/ASR/remake path requires explicit `license_status=cleared` (or documented fair-use legal sign-off) before workers proceed. Engineering must implement the Douyin connector as a **replaceable adapter**; this document does **not** specify anti-bot bypass techniques.
+
+**Target genres (full catalog vision):** Movie Recap, Anime Recap, Manhwa Recap, Manhua Recap, Motion Comic, Web Novel, Regression, Apocalypse, System, Cultivation, Fantasy, Zombie, Survival — Web Novel production + Douyin trend discovery in MVP; genre packs land on the 6-month roadmap.
 
 ---
 
@@ -42,11 +51,12 @@
 |---|---|
 | Dashboard (Next.js) | Discovery, Library, Story Graph, Generation, Assets, Queue/Jobs, Review, Export, Analytics |
 | API (NestJS) | Auth, CRUD, enqueue jobs, read models, export |
-| Workers | Import, Understand, Generate, Asset; Discovery sync from month 3 |
-| Postgres + pgvector | Relational SoT + embeddings |
+| Workers | Import, Understand, Generate, Asset, **Douyin ranking crawl** |
+| Postgres + pgvector | Relational SoT + embeddings + viral_items |
 | Redis + BullMQ | Queues, retries, lightweight cache |
 | Object storage (R2/S3) | Raw uploads, export zips, future audio |
 | AI Gateway | Multi-provider LLM/embedding, cost logs, fallbacks |
+| DouyinRankingAdapter | Pluggable connector: fetch ranking boards → normalize metadata |
 
 ### 1.3 Design principles
 
@@ -54,22 +64,23 @@
 2. All AI work is asynchronous — API enqueues and returns `job_id`.
 3. Generate from **Story Graph slice + retrieved chunks**, never from unbounded raw dumps.
 4. Prompt templates are versioned artifacts with cost accounting.
-5. Legal gate at import: every source has `license_status`; uncleared sources are rejected.
+5. Legal gate at import: every **production** source has `license_status`; uncleared sources cannot enter Import/Understand for republishable assets. Douyin ranking rows default to `research_only` until explicitly cleared.
+6. Douyin crawl is **discovery/intelligence**, not a pirate CDN — MVP persists metadata + captions + stats only.
 
 ### 1.4 Module map
 
 | Module | MVP | Notes |
 |---|---|---|
-| Content Discovery | Yes (light) | Manual source register + metadata + license gate; RSS sync deferred to month 3 |
-| Content Import | Yes | TXT, EPUB, DOCX, PDF, HTML, single URL fetch |
+| Content Discovery | Yes (core early) | Manual novel sources + **full-auto Douyin ranking crawl** + trend score; RSS sync still month 3 |
+| Content Import | Yes | TXT, EPUB, DOCX, PDF, HTML, single URL fetch (novels) |
 | Story Understanding | Yes (core) | Entity extraction → Story Graph |
 | Story Graph | Yes | Relational + JSONB + pgvector |
-| AI Generation | Yes | Storytelling + packaging prompts |
+| AI Generation | Yes | Storytelling + packaging prompts; optional viral-inspired hooks from `viral_items` |
 | Video Asset Generator | Yes (light) | Voice script, SRT, scene list, banner text — no video render |
-| Dashboard | Yes | Full IA below |
-| OCR / ASR / Vision / TTS | No | Post-MVP |
+| Dashboard | Yes | Discovery includes Douyin Viral board |
+| OCR / ASR / Vision / TTS | No | Post-MVP (Douyin ASR only after cleared rights) |
 | Publish | Export-only | Zip pack; no platform push in MVP |
-| Analytics | Light | Token/$ usage, job success |
+| Analytics | Light | Token/$ usage, job success, viral board freshness |
 
 ---
 
@@ -78,12 +89,12 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Dashboard (Next.js + Tailwind + shadcn/ui)                 │
-│  Discovery · Library · Graph · Generate · Jobs · Export     │
+│  Discovery (Douyin Viral) · Library · Graph · Generate · …  │
 └──────────────────────────┬──────────────────────────────────┘
                            │ REST + SSE
 ┌──────────────────────────▼──────────────────────────────────┐
 │  API — NestJS                                               │
-│  Auth · Projects · Sources · Stories · Jobs · Outputs       │
+│  Auth · Projects · Sources · Viral · Stories · Jobs · …     │
 └──────┬──────────────┬──────────────┬────────────────────────┘
        │              │              │
        ▼              ▼              ▼
@@ -92,22 +103,49 @@
 │ + pgvector │ │ BullMQ     │ │ R2 / S3        │
 └────────────┘ └─────┬──────┘ └────────────────┘
                      │
-         ┌───────────┼───────────┐
-         ▼           ▼           ▼
-   Import Worker  Understand   Generate / Asset
-                     │
-              ┌──────▼──────┐
-              │ AI Gateway  │
-              │ LLM·Embed   │
-              └─────────────┘
+     ┌───────────────┼───────────────┬────────────┐
+     ▼               ▼               ▼            ▼
+ Import Worker  Understand     Generate/Asset  Douyin Crawl
+     │               │               │            │
+     └───────────────┴───────────────┘            │
+                     │                            ▼
+              ┌──────▼──────┐           ┌──────────────────┐
+              │ AI Gateway  │           │ DouyinRanking    │
+              │ LLM·Embed   │           │ Adapter (plugin) │
+              └─────────────┘           └──────────────────┘
 ```
 
+### 2.1 Module — Douyin Viral Ranking (early scope)
+
+**Goal:** Automatically refresh configured Douyin ranking/hot boards so editors see what storytelling formats are winning, then use that signal to pick novels and packaging angles.
+
+**MVP stores per item (metadata only):**
+- external_id, board_key, rank_position, title/caption, author handle, stats (like/comment/share/play if available), hashtags, cover URL (link only), published_at, crawled_at, raw_payload jsonb
+- `trend_score` (normalized from rank + velocity between crawls)
+- `usage_policy`: default `research_only`
+
+**MVP does not:** download video bytes, strip watermarks, mass-repost to other platforms, or bypass documented as “how to evade Douyin defenses.”
+
+**Scheduler:** BullMQ repeatable job every N minutes/hours (config). Boards configured in `viral_boards`.
+
+**Downstream (MVP):**
+1. Discovery UI list/filter by board, score, hashtag
+2. “Suggest packaging” — pass top captions/hooks as few-shot context into `pack.*` prompts (still generating **original** VI copy for the studio’s novel)
+3. Optional link `viral_item_id` on a `story` as inspiration reference
+
+**Later (not MVP):** cleared-rights ASR → topic extract; competitive script breakdown.
 ---
 
 ## 3. Data flow
 
 ```
-Source register / Upload / single URL
+⓪ DOUYIN RANKING CRAWL (MVP, scheduled)
+   DouyinRankingAdapter → viral_boards / viral_items (metadata, trend_score)
+   │
+   ├─► Discovery UI (research_only)
+   └─► optional inspire context for pack.* prompts
+        │
+Source register / Upload / single URL (novels)
         │
         ▼
 ① SOURCE REGISTER (MVP)  ·  RSS ITEM INGEST (month 3+)
@@ -123,7 +161,8 @@ Source register / Upload / single URL
         │
         ▼
 ④ GENERATE JOB (on demand)
-   Load prompt template → graph slice + top-k chunks → LLM → outputs
+   Load prompt template → graph slice + top-k chunks
+   (+ optional viral inspire snippets) → LLM → outputs
         │
         ▼
 ⑤ ASSET JOB (optional)
@@ -132,7 +171,7 @@ Source register / Upload / single URL
 
 **Soft review (single status model):** `generation_outputs.status` starts as `ready` and is immediately usable/exportable. Optional later transitions: `ready → reviewed → approved`, or `ready → rejected`, or `archived`. There are **no** separate boolean review flags — PATCH updates `status` and/or `content` only. Export does **not** require `approved`.
 
-**Idempotency:** job key = `storyId + jobType + chapterId? + promptVersion + contentHash`.
+**Idempotency:** job key = `storyId + jobType + chapterId? + promptVersion + contentHash`. Douyin crawl upsert key = `(board_key, external_id, crawl_bucket)`.
 
 ---
 
@@ -157,14 +196,34 @@ projects (id, name, slug, style_guide jsonb, created_at)
 
 -- Sources & discovery
 sources (
-  id, project_id, name, type, -- manual|rss|url
-  base_url, license_status, -- cleared|pending|rejected
+  id, project_id, name, type, -- manual|rss|url|douyin_board
+  base_url, license_status, -- cleared|pending|rejected|research_only
   config jsonb, last_synced_at, created_at
 )
 source_items (
   id, source_id, external_key, title, url,
   published_at, genre tags[], trend_score,
   metadata jsonb, status, created_at
+)
+
+-- Douyin viral ranking (MVP early)
+viral_boards (
+  id, project_id, board_key, label,
+  adapter_config jsonb, -- board id, locale, interval — no bypass secrets in git
+  enabled, crawl_interval_sec, last_crawled_at
+)
+viral_items (
+  id, board_id, external_id,
+  rank_position, title, caption, author_handle,
+  stats jsonb, -- likes, comments, shares, plays
+  hashtags text[], cover_url, canonical_url,
+  published_at, crawled_at, trend_score,
+  usage_policy, -- research_only|cleared|blocked
+  raw_payload jsonb
+)
+viral_crawl_runs (
+  id, board_id, status, started_at, finished_at,
+  item_count, error, meta jsonb
 )
 
 -- Library
@@ -373,8 +432,17 @@ Projects
 Sources / Discovery
   GET|POST /sources
   GET|PATCH /sources/:id
-  POST /sources/:id/sync            # month 3+; MVP may stub 501
+  POST /sources/:id/sync            # month 3+ RSS; MVP may stub 501
   GET /discovery/items              # month 3+ RSS inbox; MVP lists manual sources only
+
+Douyin Viral (MVP)
+  GET|POST /viral/boards
+  GET|PATCH /viral/boards/:id
+  POST /viral/boards/:id/crawl      # enqueue full-auto ranking crawl
+  GET /viral/items                  # filter board, score, hashtag, usage_policy
+  GET /viral/items/:id
+  PATCH /viral/items/:id            # usage_policy cleared|blocked
+  GET /viral/crawl-runs
 
 Library
   GET|POST /stories
@@ -423,7 +491,7 @@ Admin
 
 | Queue | Concurrency (MVP) | Job names |
 |---|---|---|
-| `discovery` | 1 | MVP: unused/manual only. Month 3+: `rss_sync`, `trend_score` |
+| `discovery` | 1 | `douyin_rank_crawl`, `douyin_trend_score`; month 3+: `rss_sync` |
 | `import` | 2 | `parse_file`, `fetch_url`, `chunk_embed` |
 | `understand` | 2 | `extract_chapter`, `resolve_entities`, `rollup_arcs` |
 | `generate` | 3 | `gen_<type>` |
@@ -448,19 +516,20 @@ MVP: one Node worker process consuming all queues (named processors). Scale by a
 
 | Week | Deliverable |
 |---|---|
-| 1–2 | Auth, projects/stories/chapters CRUD, manual source register + license gate, TXT/EPUB upload + single URL import, parse, chunk, embed |
-| 3–4 | Understand worker, Story Graph tables, chapter summary; **minimal** arc rollup (heuristic chapter ranges → `arcs` rows) so arc-scoped generate works |
-| 5 | Generate: chapter/arc summary, narration script, video outline |
+| 1–2 | Auth, projects/stories/chapters CRUD, manual source register + license gate, TXT/EPUB upload + single URL import, parse, chunk, embed; **Douyin board config + ranking crawl adapter skeleton + viral_items persist + Discovery Viral UI** |
+| 3–4 | Understand worker, Story Graph tables, chapter summary; **minimal** arc rollup (heuristic chapter ranges → `arcs` rows) so arc-scoped generate works; trend_score + crawl scheduler hardening |
+| 5 | Generate: chapter/arc summary, narration script, video outline; optional viral-inspire for packaging context |
 | 6 | Packaging outputs, light assets (voice script text, SRT, scene list, banner text), Jobs UI, thin Review (edit content + change `status`), export zip, usage/cost logging |
 
-**Not in 6-week MVP:** automated RSS/feed polling, trend scoring jobs, TTS audio files, polished Review workflow UI (that lands month 3).
+**Not in 6-week MVP:** Douyin full-video download/ASR/repost, automated RSS/feed polling, TTS audio files, polished Review workflow UI (that lands month 3).
 
 **MVP success criteria**
 
-- Register a cleared source and import a web novel (file or single cleared URL) end-to-end
+- Scheduled Douyin ranking crawl fills Discovery Viral board with metadata + trend_score
+- Register a cleared novel source and import a web novel (file or single cleared URL) end-to-end
 - Story Graph populated for ≥1 arc worth of chapters
-- Produce VI script + packaging + light text assets and download zip
-- Cost per chapter visible in analytics
+- Produce VI script + packaging (+ optional viral-inspired hooks) + light text assets and download zip
+- Cost per chapter visible in analytics; crawl run history visible
 
 ---
 
@@ -507,11 +576,12 @@ Assumptions: ~80 chapters/week; understand + 2–3 generates/chapter; mix of mid
 
 | Item | USD / month |
 |---|---|
-| Compute (API + workers + Postgres + Redis) | 40–80 |
+| Compute (API + workers + Postgres + Redis) | 40–100 |
 | Object storage + egress | 5–15 |
 | Embeddings | 5–20 |
 | LLM (understand + generate) | 80–250 |
-| **Total (rough)** | **~150–350** |
+| Douyin crawl ops (proxy/infra if used — studio-managed) | 0–80+ (highly variable; ToS risk) |
+| **Total (rough)** | **~150–450+** |
 
 Re-processing an entire catalog or forcing strong models on extract will spike cost. Budget caps are mandatory.
 
@@ -523,7 +593,8 @@ Re-processing an entire catalog or forcing strong models on extract will spike c
 2. **Entity resolution quality** — inconsistent character names across chapters  
 3. **Context limits** — long arcs must use retrieval, not full text  
 4. **Dirty PDF/EPUB** — parse failures need manual repair path  
-5. **Single host CPU** — batch embedding; mitigate with off-peak jobs  
+6. **Crawl flakiness / blocks** — Douyin ranking adapter failures; mitigate with retries, crawl_runs visibility, manual trigger  
+7. **Single host CPU** — batch embedding; mitigate with off-peak jobs  
 
 ---
 
@@ -531,13 +602,16 @@ Re-processing an entire catalog or forcing strong models on extract will spike c
 
 | Risk | Mitigation |
 |---|---|
+| **Douyin ToS / account / IP blocks from full-auto crawl** | Adapter isolation; backoff; studio accepts risk; prefer official APIs if/when available; no bypass cookbook in-repo |
+| **Copyright if viral media reused** | Default `usage_policy=research_only`; block media download/ASR until `cleared`; never auto-repost |
 | Script hallucination | Graph + chunk grounding; chapter citations; human edit |
-| Copyright / unclear sources | Required `license_status`; import audit log |
+| Copyright / unclear novel sources | Required `license_status`; import audit log |
 | Prompt drift | Versioned templates; snapshot inputs/outputs |
 | Provider outage | Gateway multi-provider fallback |
 | Premature rigid schema | JSONB for genre attributes |
 | Over-building graph DB | Defer Neo4j until measured pain |
 | Cost runaway | Soft daily caps; mid-tier extract; generation cache |
+| Crawl brittleness (DOM/API churn) | Version adapter; crawl_runs error surfacing; manual re-crawl |
 
 ---
 
@@ -572,10 +646,8 @@ At locked scale A, a single VPS/Docker Compose stack is acceptable for MVP–3 m
 - Auto thumbnail layout suggestions (vision)  
 - Brand voice cloning (TTS)  
 - Browser extension “send chapter to factory”  
-- Inline comments / collaboration on scripts  
-- Quality rubric + RLHF-lite from editors  
-- Cross-story trope library  
-- CapCut / Premiere marker export  
+- Douyin cleared-rights ASR + competitive script breakdown  
+- Direct CapCut/Premiere marker export  
 - Spoiler leak checks for Shorts  
 - Multi-channel calendars and publish scheduling  
 - Partner APIs for licensed catalogs  
@@ -602,7 +674,7 @@ At locked scale A, a single VPS/Docker Compose stack is acceptable for MVP–3 m
 
 ## Appendix B — Dashboard information architecture
 
-1. **Discovery** — manual sources, license badges; sync/incoming RSS UI from month 3  
+1. **Discovery** — Douyin Viral board (MVP) + manual novel sources/license badges; RSS inbox from month 3  
 2. **Library** — stories, chapters, import actions  
 3. **Story Graph** — characters, arcs, timeline, relationships (read-mostly MVP)  
 4. **AI Generation** — pick type, enqueue, browse outputs  
@@ -622,7 +694,7 @@ At locked scale A, a single VPS/Docker Compose stack is acceptable for MVP–3 m
 | Worker | Idempotent handlers; DLQ; timeouts |
 | Retry | Exponential backoff; capped attempts |
 | Cache | Redis for job progress; generation dedupe keys |
-| Scheduler | Cron for RSS sync (3-month+); MVP can be manual sync |
+| Scheduler | Cron/repeatable BullMQ for Douyin crawl (MVP); RSS sync month 3+ |
 | API | REST `/api/v1`; SSE for job events |
 | Database | Postgres SoT; migrations via Prisma or Drizzle |
 | Storage | S3-compatible; signed download URLs for exports |
@@ -645,6 +717,8 @@ At locked scale A, a single VPS/Docker Compose stack is acceptable for MVP–3 m
 - Embedding dimensions locked to chosen model  
 - Vietnamese FTS config quality may need manual tuning  
 - Human repair UI for failed EPUB/PDF parses (minimal: re-upload cleaned TXT)  
+- **DouyinRankingAdapter concrete provider** chosen at implementation (official partner vs internal connector) — must stay behind interface; legal review by studio before production crawl volume  
+- Which ranking boards / categories to track for “Duyn-style” storytelling (config, not hard-coded)  
 
 ---
 
