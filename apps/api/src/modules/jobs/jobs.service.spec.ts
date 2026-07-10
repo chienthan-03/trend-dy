@@ -16,6 +16,7 @@ describe("JobsService.enqueue", () => {
     job: {
       create: ReturnType<typeof vi.fn>;
       findFirst: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
     };
   };
   let importQueue: MockQueue;
@@ -30,6 +31,7 @@ describe("JobsService.enqueue", () => {
       job: {
         create: vi.fn(),
         findFirst: vi.fn().mockResolvedValue(null),
+        update: vi.fn().mockResolvedValue({}),
       },
     };
     importQueue = createMockQueue();
@@ -147,5 +149,30 @@ describe("JobsService.enqueue", () => {
       { boardId: "b1" },
       { jobId: "job_crawl" },
     );
+  });
+
+  it("marks the job failed and rethrows when BullMQ enqueue fails", async () => {
+    prisma.job.create.mockResolvedValue({
+      id: "job_orphan",
+      type: "parse_file",
+      status: "queued",
+      storyId: null,
+      payload: {},
+    });
+    const enqueueError = new Error("Redis connection refused");
+    importQueue.add.mockRejectedValue(enqueueError);
+
+    await expect(
+      service.enqueue({ type: "parse_file", payload: {} }),
+    ).rejects.toThrow("Redis connection refused");
+
+    expect(prisma.job.update).toHaveBeenCalledWith({
+      where: { id: "job_orphan" },
+      data: {
+        status: "failed",
+        finishedAt: expect.any(Date),
+        error: "Redis connection refused",
+      },
+    });
   });
 });

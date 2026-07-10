@@ -4,6 +4,7 @@ import type { Job, Prisma } from "@prisma/client";
 import type { Queue } from "bullmq";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { QueueName } from "../../queue/queues";
+import { markFailed } from "../../workers/job-status";
 import { resolveQueueName } from "./job-type-to-queue";
 
 /** Statuses that count as "in flight" for idempotency checks. */
@@ -82,7 +83,14 @@ export class JobsService {
       ...(storyId ? { storyId } : {}),
     };
 
-    await queue.add(type, bullPayload, { jobId: job.id });
+    try {
+      await queue.add(type, bullPayload, { jobId: job.id });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "BullMQ enqueue failed";
+      await markFailed(this.prisma, job.id, message);
+      throw error;
+    }
 
     return { jobId: job.id, status: job.status };
   }
