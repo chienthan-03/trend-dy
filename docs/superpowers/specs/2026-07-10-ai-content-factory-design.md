@@ -1,0 +1,645 @@
+# AI Content Factory — PRD + Technical Design Document
+
+**Status:** Approved for implementation planning  
+**Date:** 2026-07-10  
+**Audience:** Engineering, AI, and product team building the internal studio tool  
+**Post-read action:** Implement the MVP modular monolith against this spec without re-opening architecture decisions until the 6-month evaluation gates.
+
+---
+
+## 0. Product decisions (locked)
+
+| Decision | Value |
+|---|---|
+| Product model | Single-tenant internal tool for one creative studio |
+| Output language | Vietnamese (primary) |
+| MVP content | Web Novel, text-first |
+| Content sources | Manual upload + licensed URL/RSS import |
+| Review policy | Soft review — outputs usable immediately; review optional |
+| Target scale (12 months) | ~5–10 titles/month, ~50–100 chapters/week |
+| MVP outputs | Storytelling + packaging |
+| Architecture | Modular monolith + async workers (Approach 2) |
+
+**MVP storytelling outputs:** chapter summary, arc summary, narration script, video outline  
+**MVP packaging outputs:** titles, thumbnail text, description, tags, 3-second hook  
+**Explicitly out of MVP:** OCR, ASR, TTS render, Neo4j, multi-tenant SaaS, Movie/Anime/Motion Comic pipelines, auto-publish to YouTube
+
+**Target genres (full catalog vision):** Movie Recap, Anime Recap, Manhwa Recap, Manhua Recap, Motion Comic, Web Novel, Regression, Apocalypse, System, Cultivation, Fantasy, Zombie, Survival — only Web Novel is in MVP; genre packs land on the 6-month roadmap.
+
+---
+
+## 1. Overall architecture
+
+### 1.1 Style
+
+**Modular monolith + async workers.** One deployable backend with clear module boundaries; heavy AI work runs in BullMQ workers. Postgres is the system of record. Graph database is deferred.
+
+### 1.2 Logical components
+
+| Component | Responsibility |
+|---|---|
+| Dashboard (Next.js) | Discovery, Library, Story Graph, Generation, Assets, Queue/Jobs, Review, Export, Analytics |
+| API (NestJS) | Auth, CRUD, enqueue jobs, read models, export |
+| Workers | Import, Understand, Generate, Asset, Discovery sync |
+| Postgres + pgvector | Relational SoT + embeddings |
+| Redis + BullMQ | Queues, retries, lightweight cache |
+| Object storage (R2/S3) | Raw uploads, export zips, future audio |
+| AI Gateway | Multi-provider LLM/embedding, cost logs, fallbacks |
+
+### 1.3 Design principles
+
+1. Postgres is source of truth for stories, graph entities, jobs, and outputs.
+2. All AI work is asynchronous — API enqueues and returns `job_id`.
+3. Generate from **Story Graph slice + retrieved chunks**, never from unbounded raw dumps.
+4. Prompt templates are versioned artifacts with cost accounting.
+5. Legal gate at import: every source has `license_status`; uncleared sources are rejected.
+
+### 1.4 Module map
+
+| Module | MVP | Notes |
+|---|---|---|
+| Content Discovery | Yes (light) | Licensed RSS/URL sync, metadata, simple trend score |
+| Content Import | Yes | TXT, EPUB, DOCX, PDF, HTML, URL |
+| Story Understanding | Yes (core) | Entity extraction → Story Graph |
+| Story Graph | Yes | Relational + JSONB + pgvector |
+| AI Generation | Yes | Storytelling + packaging prompts |
+| Video Asset Generator | Yes (light) | Voice script, SRT, scene list, banner text — no video render |
+| Dashboard | Yes | Full IA below |
+| OCR / ASR / Vision / TTS | No | Post-MVP |
+| Publish | Export-only | Zip pack; no platform push in MVP |
+| Analytics | Light | Token/$ usage, job success |
+
+---
+
+## 2. System diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Dashboard (Next.js + Tailwind + shadcn/ui)                 │
+│  Discovery · Library · Graph · Generate · Jobs · Export     │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ REST + SSE
+┌──────────────────────────▼──────────────────────────────────┐
+│  API — NestJS                                               │
+│  Auth · Projects · Sources · Stories · Jobs · Outputs       │
+└──────┬──────────────┬──────────────┬────────────────────────┘
+       │              │              │
+       ▼              ▼              ▼
+┌────────────┐ ┌────────────┐ ┌────────────────┐
+│ Postgres16 │ │ Redis      │ │ Object Storage │
+│ + pgvector │ │ BullMQ     │ │ R2 / S3        │
+└────────────┘ └─────┬──────┘ └────────────────┘
+                     │
+         ┌───────────┼───────────┐
+         ▼           ▼           ▼
+   Import Worker  Understand   Generate / Asset
+                     │
+              ┌──────▼──────┐
+              │ AI Gateway  │
+              │ LLM·Embed   │
+              └─────────────┘
+```
+
+---
+
+## 3. Data flow
+
+```
+Source register / Upload / RSS item
+        │
+        ▼
+① DISCOVERY / SOURCE REGISTER
+   Persist sources + source_items (metadata, license_status, tags)
+        │
+        ▼
+② IMPORT JOB
+   Parse → normalize chapters → store raw file → chunk → embed
+        │
+        ▼
+③ UNDERSTAND JOB (per chapter, then rollup)
+   LLM structured extract → upsert graph nodes/edges → summaries
+        │
+        ▼
+④ GENERATE JOB (on demand)
+   Load prompt template → graph slice + top-k chunks → LLM → outputs
+        │
+        ▼
+⑤ ASSET JOB (optional)
+   Voice script, SRT, scene list, banner text → optional export zip
+```
+
+**Soft review:** `generation_outputs.status` starts as `ready`. Optional flags: `reviewed`, `approved`, `rejected`. Export does not require approval.
+
+**Idempotency:** job key = `storyId + jobType + chapterId? + promptVersion + contentHash`.
+
+---
+
+## 4. Database schema
+
+### 4.1 Store roles
+
+| Store | Role | Rationale |
+|---|---|---|
+| Postgres | System of record | ACID, JSONB, fits scale A |
+| pgvector | Chunk embeddings + retrieval | Avoid separate vector SaaS at low volume |
+| Redis | BullMQ + short-lived cache | Standard, cheap |
+| Object storage | Blobs | Durable raw + exports |
+| Neo4j / dedicated graph DB | **Not in MVP** | Re-evaluate at 6–12 months if multi-hop queries hurt |
+
+### 4.2 Core tables
+
+```sql
+-- Identity (single-tenant studio)
+users (id, email, name, role, created_at)
+projects (id, name, slug, style_guide jsonb, created_at)
+
+-- Sources & discovery
+sources (
+  id, project_id, name, type, -- manual|rss|url
+  base_url, license_status, -- cleared|pending|rejected
+  config jsonb, last_synced_at, created_at
+)
+source_items (
+  id, source_id, external_key, title, url,
+  published_at, genre tags[], trend_score,
+  metadata jsonb, status, created_at
+)
+
+-- Library
+stories (
+  id, project_id, source_id null,
+  title, language, genre text[], tags text[],
+  status, metadata jsonb, created_at, updated_at
+)
+chapters (
+  id, story_id, number, title,
+  raw_text, clean_text, content_hash,
+  word_count, status, imported_at
+)
+story_chunks (
+  id, chapter_id, ordinal, text,
+  token_estimate, embedding vector(1536),
+  content_hash
+)
+
+-- Jobs & outputs
+jobs (
+  id, type, status, priority,
+  payload jsonb, result jsonb,
+  attempts, max_attempts, error,
+  created_at, started_at, finished_at
+)
+prompt_templates (
+  id, key, version, locale, body,
+  model_hint, output_schema jsonb, active, created_at
+)
+generation_outputs (
+  id, story_id, chapter_id null, arc_id null,
+  type, prompt_template_id, prompt_version,
+  input_ref jsonb, content text, content_json jsonb,
+  status, -- ready|reviewed|approved|rejected|archived
+  tokens_in, tokens_out, cost_usd,
+  created_at, updated_at
+)
+assets (
+  id, story_id, generation_output_id null,
+  type, uri, meta jsonb, created_at
+)
+usage_events (
+  id, job_id null, provider, model,
+  tokens_in, tokens_out, cost_usd, created_at
+)
+```
+
+### 4.3 Indexes (minimum)
+
+- `UNIQUE (story_id, chapters.number)`
+- `UNIQUE (story_id, content_hash)` on chapters where applicable
+- GIN on `stories.genre`, `stories.tags`
+- HNSW/IVFFlat on `story_chunks.embedding`
+- `(jobs.status, jobs.priority, jobs.created_at)`
+- `UNIQUE (prompt_templates.key, prompt_templates.version)`
+
+---
+
+## 5. Story Graph schema
+
+### 5.1 Entities
+
+```sql
+characters (
+  id, story_id, name, aliases text[],
+  role, summary, attributes jsonb
+)
+abilities (
+  id, story_id, character_id null,
+  name, type, description, power_level null, attributes jsonb
+)
+locations (
+  id, story_id, name, type, description, attributes jsonb
+)
+items (
+  id, story_id, name, type, description,
+  owner_character_id null, attributes jsonb
+)
+arcs (
+  id, story_id, name, order_index, summary,
+  start_chapter_id null, end_chapter_id null
+)
+events (
+  id, story_id, chapter_id, arc_id null,
+  type, summary, importance int,
+  timeline_order int, payload jsonb
+)
+event_characters (
+  event_id, character_id, role -- actor|victim|mention|...
+)
+relationships (
+  id, story_id,
+  from_character_id, to_character_id,
+  type, description, since_chapter_id null
+)
+plot_signals (
+  id, story_id, chapter_id,
+  kind, -- plot_twist|hook|cliffhanger
+  text, strength int, payload jsonb
+)
+timeline_entries (
+  id, story_id, event_id, position, label
+)
+```
+
+### 5.2 Logical edges
+
+- Character → Ability (`abilities.character_id`)
+- Character ↔ Character (`relationships`)
+- Event → Characters (`event_characters`)
+- Event → Chapter / Arc
+- Arc ordered on Timeline via `timeline_entries` / `arcs.order_index`
+
+### 5.3 Genre-specific flexibility
+
+Use `attributes jsonb` / `payload jsonb` for System skills, Cultivation realms, Regression checkpoints, etc. Do not fork tables per genre in MVP.
+
+### 5.4 Extraction contract (chapter understand)
+
+LLM must return JSON conforming to a fixed schema version, e.g. `extract.chapter.v1`, including: characters[], relationships[], events[], locations[], abilities[], items[], plot_signals[], chapter_summary.
+
+Entity resolution runs after extract: normalize names, merge aliases within `story_id`, prefer existing IDs on fuzzy match above threshold.
+
+---
+
+## 6. AI pipelines
+
+### 6.1 Model map
+
+| Step | Model tier | Example |
+|---|---|---|
+| Embedding | Small embedding | `text-embedding-3-small` |
+| Chapter extract | Mid LLM | GPT-4.1-mini / Claude Haiku / Gemini Flash |
+| Arc / story rollup | Mid or Strong | Prefer mid; strong if noisy |
+| Narration script / outline | Strong LLM | GPT-4.1 / Claude Sonnet |
+| Titles, tags, hooks (n-best) | Mid LLM | Batch variants |
+| OCR (later) | Vision or self-host OCR | GPT-4o / Gemini / PaddleOCR |
+| ASR (later) | Whisper-class | Whisper / AssemblyAI |
+| TTS (later) | Neural TTS | ElevenLabs / Azure |
+
+All calls go through an **AI Gateway** (Vercel AI Gateway, OpenRouter, or thin internal proxy) for provider failover, rate limits, and `usage_events`.
+
+### 6.2 Pipeline P1 — Import
+
+1. Detect format (TXT, EPUB, DOCX, PDF, HTML, URL fetch).
+2. Parse → `clean_text`; compute `content_hash`.
+3. Split into chapters if needed.
+4. Chunk ~800–1200 tokens, overlap ~100.
+5. Embed → `story_chunks`.
+6. Store original blob in object storage.
+
+### 6.3 Pipeline P2 — Understand (per chapter)
+
+1. Build extract prompt + JSON schema `extract.chapter.v1`.
+2. Call mid-tier LLM with structured output.
+3. Entity resolution / alias merge.
+4. Upsert graph tables.
+5. Write chapter summary (VI).
+
+### 6.4 Pipeline P3 — Rollup
+
+1. Aggregate chapter summaries → propose arcs.
+2. Merge/confirm arcs; link start/end chapters.
+3. Build story-level world / power-system notes into `stories.metadata` or dedicated rows later.
+
+### 6.5 Pipeline P4 — Generate
+
+1. Load active `prompt_templates` for `(key, locale=vi)`.
+2. Context = graph slice + top-k chunks (4–8) + project `style_guide`.
+3. Strong/mid LLM per type; validate length/format.
+4. Persist `generation_outputs` + usage.
+
+**MVP generation keys:**  
+`summary.chapter`, `summary.arc`, `script.narration`, `outline.video`, `pack.title`, `pack.thumbnail_text`, `pack.description`, `pack.tags`, `pack.hook_3s`
+
+### 6.6 Pipeline P5 — Assets
+
+From approved-or-ready script:
+
+- `voice_script` (speakable VI)
+- `subtitle` (SRT cues)
+- `scene_list` (ordered beats)
+- `banner_text`
+- Optional `export_zip` bundling selected outputs
+
+No full video render in this system.
+
+---
+
+## 7. API design
+
+Base: versioned REST under `/api/v1`. Auth required except health.
+
+```
+Auth
+  POST /auth/login
+  POST /auth/logout
+  GET  /me
+
+Projects
+  GET|POST /projects
+  GET|PATCH|DELETE /projects/:id
+
+Sources / Discovery
+  GET|POST /sources
+  GET|PATCH /sources/:id
+  POST /sources/:id/sync
+  GET /discovery/items
+
+Library
+  GET|POST /stories
+  GET|PATCH|DELETE /stories/:id
+  GET /stories/:id/chapters
+  GET /stories/:id/chapters/:chapterId
+  GET /stories/:id/graph
+
+Import
+  POST /stories/:id/import          # multipart file and/or { url }
+  POST /stories/:id/import/batch
+
+Jobs
+  GET /jobs
+  GET /jobs/:id
+  GET /jobs/:id/events              # SSE progress
+  POST /jobs/:id/retry
+  POST /jobs/:id/cancel
+
+Understand / Generate
+  POST /stories/:id/understand      # { chapter_ids?:[], rollup?: bool }
+  POST /stories/:id/generate        # { type, chapter_id?, arc_id?, options? }
+  GET /stories/:id/outputs
+  GET /outputs/:id
+  PATCH /outputs/:id                # content edit + review flags
+
+Assets / Export
+  POST /outputs/:id/assets          # { types: [] }
+  POST /stories/:id/export          # { output_ids?: [], format: "zip" }
+
+Admin
+  GET|POST /prompt-templates
+  GET|PATCH /prompt-templates/:id
+  GET /analytics/usage
+```
+
+**Error shape:** `{ error: { code, message, details? } }`  
+**Job enqueue response:** `{ job_id, status: "queued" }`
+
+---
+
+## 8. Worker design
+
+### 8.1 Queues (BullMQ)
+
+| Queue | Concurrency (MVP) | Job names |
+|---|---|---|
+| `discovery` | 1 | `rss_sync`, `trend_score` |
+| `import` | 2 | `parse_file`, `fetch_url`, `chunk_embed` |
+| `understand` | 2 | `extract_chapter`, `resolve_entities`, `rollup_arcs` |
+| `generate` | 3 | `gen_<type>` |
+| `asset` | 2 | `build_srt`, `scene_list`, `export_zip` |
+
+### 8.2 Reliability
+
+- Retry: exponential backoff, `max_attempts` 3–5 by queue
+- Dead-letter / failed set for manual replay
+- Timeouts: import 10m, understand 5m, generate 3m, asset 5m
+- Circuit breaker on provider 429/5xx
+- Daily soft budget on `generate` + `understand` — pause queue and alert when exceeded
+- Progress events published for SSE
+
+### 8.3 Worker process layout
+
+MVP: one Node worker process consuming all queues (named processors). Scale by adding worker replicas with queue-specific concurrency via env.
+
+---
+
+## 9. Roadmap — MVP (weeks 1–6)
+
+| Week | Deliverable |
+|---|---|
+| 1–2 | Auth, projects/stories/chapters CRUD, TXT/EPUB upload, parse, chunk, embed |
+| 3–4 | Understand worker, Story Graph tables, chapter summary |
+| 5 | Generate: chapter/arc summary, narration script, video outline |
+| 6 | Packaging outputs, Jobs UI, export zip, usage/cost logging |
+
+**MVP success criteria**
+
+- Import a licensed web novel (file or cleared URL) end-to-end
+- Story Graph populated for ≥1 arc worth of chapters
+- Produce VI script + packaging pack and download zip
+- Cost per chapter visible in analytics
+
+---
+
+## 10. Roadmap — 3 months
+
+- Licensed URL/RSS discovery with hard `license_status` gate
+- Arc rollup + character profiles + basic timeline UI
+- Prompt versioning + light A/B
+- Soft review UI (edit/flag outputs)
+- Better entity resolution (aliases)
+- Stable DOCX/PDF/HTML import
+- Per-story and per-day usage dashboard
+- Channel style guides on `projects.style_guide`
+
+---
+
+## 11. Roadmap — 6 months
+
+- Genre packs: Regression, System, Cultivation, Apocalypse (JSONB attrs + prompts)
+- Power progression, world analysis, plot-twist lists, shorts ideas
+- OCR path for Manhwa/Manhua images
+- Optional Meilisearch or richer Postgres FTS
+- Richer graph visualization; **decision gate: adopt Neo4j or not**
+- Optional TTS audio drafts
+- Scheduler for source sync + incremental re-understand
+
+---
+
+## 12. Roadmap — 12 months
+
+- Anime/Movie recap path (ASR + light scene detection)
+- Motion comic / vision assist
+- Optional EN outputs
+- Quality scoring + editor feedback → prompt/model tuning
+- Script auto-edit suggestions
+- Scale: dedicated worker pools, read replica, optional graph DB
+- Ops analytics: import → publish-ready latency, acceptance rate
+
+---
+
+## 13. Cost analysis (indicative, scale A)
+
+Assumptions: ~80 chapters/week; understand + 2–3 generates/chapter; mix of mid/strong models.
+
+| Item | USD / month |
+|---|---|
+| Compute (API + workers + Postgres + Redis) | 40–80 |
+| Object storage + egress | 5–15 |
+| Embeddings | 5–20 |
+| LLM (understand + generate) | 80–250 |
+| **Total (rough)** | **~150–350** |
+
+Re-processing an entire catalog or forcing strong models on extract will spike cost. Budget caps are mandatory.
+
+---
+
+## 14. Bottleneck analysis
+
+1. **LLM latency / rate limits** — bulk understand after full-book import  
+2. **Entity resolution quality** — inconsistent character names across chapters  
+3. **Context limits** — long arcs must use retrieval, not full text  
+4. **Dirty PDF/EPUB** — parse failures need manual repair path  
+5. **Single host CPU** — batch embedding; mitigate with off-peak jobs  
+
+---
+
+## 15. Technical risks
+
+| Risk | Mitigation |
+|---|---|
+| Script hallucination | Graph + chunk grounding; chapter citations; human edit |
+| Copyright / unclear sources | Required `license_status`; import audit log |
+| Prompt drift | Versioned templates; snapshot inputs/outputs |
+| Provider outage | Gateway multi-provider fallback |
+| Premature rigid schema | JSONB for genre attributes |
+| Over-building graph DB | Defer Neo4j until measured pain |
+| Cost runaway | Soft daily caps; mid-tier extract; generation cache |
+
+---
+
+## 16. Scalability
+
+- Horizontal: add worker replicas per queue  
+- Vertical Postgres first; read replica when dashboard read-heavy  
+- Partition/filter pgvector by `story_id` if needed  
+- Extract microservices later (`import`, `generate`) behind same API contracts  
+- Graph DB only if multi-hop relationship queries become a real share of load (~20%+ of analytical traffic)  
+
+At locked scale A, a single VPS/Docker Compose stack is acceptable for MVP–3 months.
+
+---
+
+## 17. AI cost optimization
+
+1. Mid-tier for extract; strong only for final narration script  
+2. Skip re-embed when `content_hash` unchanged  
+3. Incremental understand — new/changed chapters only  
+4. Short structured prompts; discourage verbose chain-of-thought in production  
+5. Top-k chunk retrieval (4–8), not full chapter paste  
+6. Daily/monthly budget caps + alerts  
+7. Batch packaging variants on mid-tier  
+8. Dedupe generations on `(type, prompt_version, input_hash)`  
+9. Cache rollup summaries; invalidate on chapter graph change  
+
+---
+
+## 18. Future improvements backlog
+
+- Auto thumbnail layout suggestions (vision)  
+- Brand voice cloning (TTS)  
+- Browser extension “send chapter to factory”  
+- Inline comments / collaboration on scripts  
+- Quality rubric + RLHF-lite from editors  
+- Cross-story trope library  
+- CapCut / Premiere marker export  
+- Spoiler leak checks for Shorts  
+- Multi-channel calendars and publish scheduling  
+- Partner APIs for licensed catalogs  
+
+---
+
+## Appendix A — Tech stack
+
+| Layer | Choice |
+|---|---|
+| Frontend | Next.js (App Router), Tailwind, shadcn/ui |
+| Backend | NestJS (module boundaries) |
+| Queue | Redis + BullMQ |
+| Database | Postgres 16 + pgvector |
+| Search (MVP) | Postgres FTS + pgvector |
+| Search (later) | Meilisearch optional |
+| Object storage | Cloudflare R2 or S3 |
+| Auth | Auth.js or Better Auth (email + invite) |
+| AI | Vercel AI SDK + AI Gateway |
+| Observability | Structured logs + OpenTelemetry; `usage_events` |
+| Deploy MVP | Docker Compose on one VPS; later Fly/Railway/VPS fleet |
+
+---
+
+## Appendix B — Dashboard information architecture
+
+1. **Discovery** — sources, sync status, incoming items, license badges  
+2. **Library** — stories, chapters, import actions  
+3. **Story Graph** — characters, arcs, timeline, relationships (read-mostly MVP)  
+4. **AI Generation** — pick type, enqueue, browse outputs  
+5. **Asset Export** — build pack, download zip  
+6. **Queue / Jobs** — live status, retry, errors  
+7. **Review** — optional flags/edits (soft)  
+8. **Publish** — export-centric in MVP  
+9. **Analytics** — tokens, cost, job success  
+
+---
+
+## Appendix C — Non-functional requirements
+
+| Area | Requirement |
+|---|---|
+| Queue | BullMQ; named queues; priority field |
+| Worker | Idempotent handlers; DLQ; timeouts |
+| Retry | Exponential backoff; capped attempts |
+| Cache | Redis for job progress; generation dedupe keys |
+| Scheduler | Cron for RSS sync (3-month+); MVP can be manual sync |
+| API | REST `/api/v1`; SSE for job events |
+| Database | Postgres SoT; migrations via Prisma or Drizzle |
+| Storage | S3-compatible; signed download URLs for exports |
+| Security | Authn required; license gate; no public multi-tenant isolation needed |
+| Reliability | Job replay; provider fallback; budget kill-switch |
+
+---
+
+## Appendix D — Approaches considered
+
+1. **Simple Next.js monolith** — fastest, weakest long-term boundaries → rejected for 6–12 month roadmap  
+2. **Modular monolith + workers (chosen)** — fits scale A, clear modules, affordable  
+3. **Microservices + Neo4j from day one** — overkill for 5–10 titles/month → deferred  
+
+---
+
+## Appendix E — Open items for implementation plan (not blockers)
+
+- Exact NestJS vs Fastify finalization → **NestJS default**  
+- Embedding dimensions locked to chosen model  
+- Vietnamese FTS config quality may need manual tuning  
+- Human repair UI for failed EPUB/PDF parses (minimal: re-upload cleaned TXT)  
+
+---
+
+*End of design document.*
