@@ -5,6 +5,7 @@ import { JobsModule } from "./modules/jobs/jobs.module";
 import { ProjectsModule } from "./modules/projects/projects.module";
 import { SourcesModule } from "./modules/sources/sources.module";
 import { StoriesModule } from "./modules/stories/stories.module";
+import { UnderstandModule } from "./modules/understand/understand.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { QueueModule } from "./queue/queue.module";
 
@@ -18,6 +19,7 @@ import { QueueModule } from "./queue/queue.module";
     SourcesModule,
     StoriesModule,
     ImportModule,
+    UnderstandModule,
   ],
 })
 export class AppModule {}

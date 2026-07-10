@@ -5,19 +5,14 @@ import { Processor, WorkerHost } from "@nestjs/bullmq";
 import type { Job } from "bullmq";
 import { ImportModule } from "../modules/import/import.module";
 import { JobsModule } from "../modules/jobs/jobs.module";
+import { UnderstandModule } from "../modules/understand/understand.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { QueueModule } from "../queue/queue.module";
 import { QUEUE_NAMES } from "../queue/queues";
 import { ImportProcessor } from "./processors/import.processor";
+import { UnderstandProcessor } from "./processors/understand.processor";
 
-const [, UNDERSTAND_Q, GENERATE_Q, ASSET_Q, DISCOVERY_Q] = QUEUE_NAMES;
-
-@Processor(UNDERSTAND_Q)
-class UnderstandNoopProcessor extends WorkerHost {
-  async process(_job: Job): Promise<void> {
-    // noop — real understand processor lands in a later task
-  }
-}
+const [, , GENERATE_Q, ASSET_Q, DISCOVERY_Q] = QUEUE_NAMES;
 
 @Processor(GENERATE_Q)
 class GenerateNoopProcessor extends WorkerHost {
@@ -41,10 +36,10 @@ class DiscoveryNoopProcessor extends WorkerHost {
 }
 
 @Module({
-  imports: [QueueModule, PrismaModule, JobsModule, ImportModule],
+  imports: [QueueModule, PrismaModule, JobsModule, ImportModule, UnderstandModule],
   providers: [
     ImportProcessor,
-    UnderstandNoopProcessor,
+    UnderstandProcessor,
     GenerateNoopProcessor,
     AssetNoopProcessor,
     DiscoveryNoopProcessor,
@@ -56,7 +51,7 @@ const bootstrap = async () => {
   const app = await NestFactory.createApplicationContext(WorkerModule);
   app.enableShutdownHooks();
   console.log(
-    `Worker started — ImportProcessor + noop processors for ${QUEUE_NAMES.join(", ")}`,
+    `Worker started — ImportProcessor, UnderstandProcessor + noop processors for ${QUEUE_NAMES.join(", ")}`,
   );
 };
 
