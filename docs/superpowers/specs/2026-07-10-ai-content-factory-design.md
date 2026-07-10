@@ -1,7 +1,7 @@
 # AI Content Factory — PRD + Technical Design Document
 
-**Status:** Draft revision — Douyin viral ranking added to early scope (pending re-approval)  
-**Date:** 2026-07-10 (rev. Douyin discovery)  
+**Status:** Approved for implementation planning  
+**Date:** 2026-07-10 (rev. Douyin genre boards + tier — approved)  
 **Audience:** Engineering, AI, and product team building the internal studio tool  
 **Post-read action:** Implement the MVP modular monolith against this spec without re-opening architecture decisions until the 6-month evaluation gates — except Douyin connector details, which are intentionally adapter-scoped.
 
