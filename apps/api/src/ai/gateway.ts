@@ -18,6 +18,14 @@ export type CompleteJsonResult<T> = {
   provider: string;
 };
 
+export type CompleteTextResult = {
+  text: string;
+  model: string;
+  tokensIn: number;
+  tokensOut: number;
+  provider: string;
+};
+
 export type EmbedResult = {
   embeddings: number[][];
   model: string;
@@ -193,6 +201,94 @@ const completeJsonWithOpenAi = async <T>(
     tokensIn: payload.usage?.prompt_tokens ?? Math.ceil(prompt.length / 4),
     tokensOut:
       payload.usage?.completion_tokens ?? Math.ceil(content.length / 4),
+  };
+};
+
+const FAKE_VI_BY_TYPE: Record<string, string> = {
+  "summary.chapter": "Tóm tắt chương mẫu (VI): nhân vật chính đối mặt thử thách mới.",
+  "summary.arc": "Tóm tắt cung truyện mẫu (VI): hành trình phát triển qua nhiều chương.",
+  "script.narration": "Kịch bản thuyết minh mẫu (VI): Mở đầu — câu chuyện bắt đầu từ một ngày bình thường...",
+  "outline.video": "1. Hook\n2. Bối cảnh\n3. Xung đột\n4. Cao trào\n5. Kết",
+  "pack.title": "1. Tiêu đề A\n2. Tiêu đề B\n3. Tiêu đề C",
+  "pack.thumbnail_text": "HỌ KHÔNG NGỜ\nBÍ MẬT NÀY\nXEM NGAY",
+  "pack.description": "Recap đầy đủ cung truyện — theo dõi để không bỏ lỡ tập sau!",
+  "pack.tags": '["recap","truyện","vi","douyin","tiktok","manhua","fantasy","hấp_dẫn"]',
+  "pack.hook_3s": "Bạn có tin chuyện này lại bắt đầu từ một viên đá vô danh?",
+};
+
+const completeTextWithOpenAi = async (
+  prompt: string,
+  system?: string,
+): Promise<{ text: string; tokensIn: number; tokensOut: number }> => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is required when LLM_MODE is not fake");
+  }
+
+  const model = process.env.LLM_MODEL ?? "gpt-4.1-mini";
+  const baseUrl = process.env.AI_GATEWAY_URL ?? "https://api.openai.com/v1";
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        ...(system ? [{ role: "system", content: system }] : []),
+        { role: "user", content: prompt },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`LLM request failed (${response.status}): ${body}`);
+  }
+
+  const payload = (await response.json()) as {
+    choices: Array<{ message: { content: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+
+  const content = payload.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error("LLM returned empty content");
+  }
+
+  return {
+    text: content,
+    tokensIn: payload.usage?.prompt_tokens ?? Math.ceil(prompt.length / 4),
+    tokensOut:
+      payload.usage?.completion_tokens ?? Math.ceil(content.length / 4),
+  };
+};
+
+export const completeText = async (
+  prompt: string,
+  options?: { type?: string; system?: string },
+): Promise<CompleteTextResult> => {
+  const model = process.env.LLM_MODEL ?? "gpt-4.1-mini";
+  const tokensIn = Math.ceil(prompt.length / 4);
+
+  if (process.env.LLM_MODE === "fake") {
+    const type = options?.type ?? "unknown";
+    const text = FAKE_VI_BY_TYPE[type] ?? `[VI mẫu] ${type}`;
+    return {
+      text,
+      model: "fake",
+      tokensIn,
+      tokensOut: Math.ceil(text.length / 4),
+      provider: "fake",
+    };
+  }
+
+  const result = await completeTextWithOpenAi(prompt, options?.system);
+  return {
+    ...result,
+    model,
+    provider: process.env.AI_GATEWAY_URL ? "gateway" : "openai",
   };
 };
 
