@@ -19,6 +19,7 @@ describe("ContextBuilder", () => {
       findFirst: ReturnType<typeof vi.fn>;
     };
     storyChunk: { findMany: ReturnType<typeof vi.fn> };
+    viralItem: { findMany: ReturnType<typeof vi.fn> };
   };
   let builder: ContextBuilder;
 
@@ -34,6 +35,7 @@ describe("ContextBuilder", () => {
       story: {
         findUnique: vi.fn().mockResolvedValue({
           id: storyId,
+          projectId: "project_1",
           title: "Kiếm Thánh",
           language: "vi",
         }),
@@ -108,6 +110,60 @@ describe("ContextBuilder", () => {
             ordinal,
             text: `Chunk ${ordinal} ngắn cho chương.`,
           }));
+        }),
+      },
+      viralItem: {
+        findMany: vi.fn().mockImplementation(async ({ where }) => {
+          const all = [
+            {
+              caption: "S-tier cultivation hook",
+              tier: "S",
+              genres: ["cultivation"],
+              usagePolicy: "research_only",
+            },
+            {
+              caption: "A-tier cultivation title",
+              tier: "A",
+              genres: ["cultivation"],
+              usagePolicy: "research_only",
+            },
+            {
+              caption: "B-tier cultivation skip",
+              tier: "B",
+              genres: ["cultivation"],
+              usagePolicy: "research_only",
+            },
+            {
+              caption: "S-tier fantasy skip",
+              tier: "S",
+              genres: ["fantasy"],
+              usagePolicy: "research_only",
+            },
+            {
+              caption: null,
+              tier: "S",
+              genres: ["cultivation"],
+              usagePolicy: "research_only",
+            },
+          ];
+
+          return all
+            .filter((item) => {
+              if (where.tier?.in && !where.tier.in.includes(item.tier)) {
+                return false;
+              }
+              if (where.genres?.has && !item.genres.includes(where.genres.has)) {
+                return false;
+              }
+              if (where.usagePolicy?.not === "blocked" && item.usagePolicy === "blocked") {
+                return false;
+              }
+              if (where.caption?.not === null && item.caption === null) {
+                return false;
+              }
+              return true;
+            })
+            .map(({ caption, tier }) => ({ caption, tier }));
         }),
       },
     };
@@ -189,5 +245,67 @@ describe("ContextBuilder", () => {
     const serialized = JSON.stringify(context);
     expect(serialized).not.toContain(FULL_BOOK_MARKER);
     expect(serialized.length).toBeLessThan(5_000);
+  });
+
+  it("includes only tier S/A viral captions for inspireGenre on packaging types", async () => {
+    prisma.arc.findFirst.mockResolvedValue({
+      id: "arc_1",
+      startChapterId: chapter1Id,
+      endChapterId: chapter2Id,
+    });
+    prisma.chapter.findUnique.mockImplementation(async ({ where }) => {
+      if (where.id === chapter1Id) return { number: 1 };
+      if (where.id === chapter2Id) return { number: 2 };
+      return null;
+    });
+    prisma.chapter.findMany.mockImplementation(async ({ where }) => {
+      if (where.storyId && where.number) {
+        return [
+          { id: chapter1Id, number: 1 },
+          { id: chapter2Id, number: 2 },
+        ];
+      }
+      return [];
+    });
+
+    const context = await builder.build(storyId, {
+      type: "pack.title",
+      arcId: "arc_1",
+      inspireFromViral: { inspireGenre: "cultivation" },
+    });
+
+    expect(context.viralInspire).toEqual([
+      { caption: "S-tier cultivation hook", tier: "S" },
+      { caption: "A-tier cultivation title", tier: "A" },
+    ]);
+    expect(prisma.viralItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tier: { in: ["S", "A"] },
+          genres: { has: "cultivation" },
+          board: { projectId: "project_1" },
+        }),
+      }),
+    );
+  });
+
+  it("omits viral inspire for non-packaging types unless includeScriptNarration", async () => {
+    const summaryContext = await builder.build(storyId, {
+      type: "summary.chapter",
+      chapterId: chapter1Id,
+      inspireFromViral: { inspireGenre: "cultivation" },
+    });
+    expect(summaryContext.viralInspire).toBeUndefined();
+    expect(prisma.viralItem.findMany).not.toHaveBeenCalled();
+
+    prisma.viralItem.findMany.mockClear();
+
+    const scriptContext = await builder.build(storyId, {
+      type: "script.narration",
+      chapterId: chapter1Id,
+      inspireFromViral: { inspireGenre: "cultivation" },
+    });
+    expect(scriptContext.viralInspire).toBeUndefined();
+    expect(prisma.viralItem.findMany).not.toHaveBeenCalled();
   });
 });

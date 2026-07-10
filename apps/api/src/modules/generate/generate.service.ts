@@ -15,6 +15,7 @@ import { StoriesService } from "../stories/stories.service";
 import { PrismaService } from "../../prisma/prisma.service";
 import { PromptsService } from "../prompts/prompts.service";
 import { ContextBuilder } from "./context-builder";
+import { parseInspireFromViralOptions } from "./inspire-from-viral";
 import type { UpdateOutputDto } from "./dto/update-output.dto";
 import type { GenerateDto } from "./dto/generate.dto";
 
@@ -65,10 +66,13 @@ export class GenerateService {
       );
     }
 
+    const inspireFromViral = parseInspireFromViralOptions(body.options);
+
     const context = await this.contextBuilder.build(storyId, {
       type: body.type,
       chapterId: body.chapterId,
       arcId: body.arcId,
+      inspireFromViral,
     });
 
     const inputHash = computeInputHash({

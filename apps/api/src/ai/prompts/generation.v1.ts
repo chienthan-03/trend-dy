@@ -1,5 +1,10 @@
 import type { GenerationType } from "./generation.types";
 
+export type ViralInspireSnippet = {
+  caption: string;
+  tier: string;
+};
+
 export type GenerationContext = {
   storyTitle: string;
   language: string;
@@ -22,6 +27,7 @@ export type GenerationContext = {
     ordinal: number;
     text: string;
   }>;
+  viralInspire?: ViralInspireSnippet[];
 };
 
 const renderContextBlock = (context: GenerationContext): string => {
@@ -37,8 +43,11 @@ const renderContextBlock = (context: GenerationContext): string => {
   const chunks = context.chunks
     .map((c) => `[chunk ${c.ordinal}] ${c.text}`)
     .join("\n\n");
+  const viralInspire = context.viralInspire
+    ?.map((item) => `- [${item.tier}] ${item.caption}`)
+    .join("\n");
 
-  return [
+  const sections = [
     `Truyện: ${context.storyTitle}`,
     "",
     "Nhân vật:",
@@ -52,7 +61,17 @@ const renderContextBlock = (context: GenerationContext): string => {
     "",
     "Đoạn trích (top-k chunks):",
     chunks || "(không có)",
-  ].join("\n");
+  ];
+
+  if (viralInspire) {
+    sections.push(
+      "",
+      "Ví dụ viral tham khảo (chỉ học phong cách, KHÔNG sao chép nguyên văn):",
+      viralInspire,
+    );
+  }
+
+  return sections.join("\n");
 };
 
 export const buildGenerationPrompt = (input: {

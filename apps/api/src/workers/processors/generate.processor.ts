@@ -8,6 +8,7 @@ import {
 } from "../../ai/prompts/generation.types";
 import { buildGenerationPrompt } from "../../ai/prompts/generation.v1";
 import { ContextBuilder } from "../../modules/generate/context-builder";
+import { parseInspireFromViralOptions } from "../../modules/generate/inspire-from-viral";
 import { GenerateService } from "../../modules/generate/generate.service";
 import { PromptsService } from "../../modules/prompts/prompts.service";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -94,10 +95,13 @@ export class GenerateProcessor extends WorkerHost {
       return existing.id;
     }
 
+    const inspireFromViral = parseInspireFromViralOptions(payload.options);
+
     const context = await this.contextBuilder.build(storyId, {
       type,
       chapterId,
       arcId,
+      inspireFromViral,
     });
 
     const prompt = buildGenerationPrompt({

@@ -4,17 +4,26 @@ import {
   CHAPTER_SCOPED_TYPES,
   type GenerationType,
 } from "../../ai/prompts/generation.types";
-import type { GenerationContext } from "../../ai/prompts/generation.v1";
+import type {
+  GenerationContext,
+  ViralInspireSnippet,
+} from "../../ai/prompts/generation.v1";
 import { PrismaService } from "../../prisma/prisma.service";
+import {
+  type InspireFromViralOptions,
+  shouldIncludeViralInspire,
+} from "./inspire-from-viral";
 
 const MIN_CHUNKS = 4;
 const MAX_CHUNKS = 8;
 const MAX_EVENTS = 30;
+const MAX_VIRAL_INSPIRE = 8;
 
 export type BuildContextInput = {
   type: GenerationType;
   chapterId?: string;
   arcId?: string;
+  inspireFromViral?: InspireFromViralOptions;
 };
 
 @Injectable()
@@ -27,7 +36,7 @@ export class ContextBuilder {
   ): Promise<GenerationContext> {
     const story = await this.prisma.story.findUnique({
       where: { id: storyId },
-      select: { id: true, title: true, language: true },
+      select: { id: true, projectId: true, title: true, language: true },
     });
     if (!story) {
       throw new NotFoundException(`Story ${storyId} not found`);
@@ -44,7 +53,12 @@ export class ContextBuilder {
 
     const chapterIds = await this.resolveChapterIds(storyId, input);
 
-    const [characters, events, arcs, chunks] = await Promise.all([
+    const includeViralInspire = shouldIncludeViralInspire(
+      input.type,
+      input.inspireFromViral,
+    );
+
+    const [characters, events, arcs, chunks, viralInspire] = await Promise.all([
       this.prisma.character.findMany({
         where: { storyId },
         select: { name: true, role: true, summary: true },
@@ -75,6 +89,9 @@ export class ContextBuilder {
         take: input.arcId ? 1 : 10,
       }),
       this.loadTopChunks(chapterIds),
+      includeViralInspire
+        ? this.loadViralInspire(story.projectId, input.inspireFromViral!)
+        : Promise.resolve(undefined),
     ]);
 
     return {
@@ -84,7 +101,36 @@ export class ContextBuilder {
       events,
       arcs,
       chunks,
+      ...(viralInspire && viralInspire.length > 0 ? { viralInspire } : {}),
     };
+  }
+
+  private async loadViralInspire(
+    projectId: string,
+    options: InspireFromViralOptions,
+  ): Promise<ViralInspireSnippet[]> {
+    const items = await this.prisma.viralItem.findMany({
+      where: {
+        tier: { in: ["S", "A"] },
+        genres: { has: options.inspireGenre },
+        usagePolicy: { not: "blocked" },
+        caption: { not: null },
+        board: { projectId },
+      },
+      select: { caption: true, tier: true },
+      orderBy: [{ trendScore: "desc" }, { crawledAt: "desc" }],
+      take: MAX_VIRAL_INSPIRE,
+    });
+
+    return items
+      .filter(
+        (item): item is { caption: string; tier: string } =>
+          item.caption !== null && item.tier !== null,
+      )
+      .map((item) => ({
+        caption: item.caption,
+        tier: item.tier,
+      }));
   }
 
   private async resolveChapterIds(
