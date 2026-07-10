@@ -11,5 +11,11 @@
     "build": "echo \"TODO: build workspace\"",
     "test": "echo \"TODO: run tests\"",
     "lint": "echo \"TODO: lint workspace\""
+  },
+  "devDependencies": {
+    "prisma": "^6.19.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3"
   }
 }

@@ -1,0 +1,524 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// ─── Identity ───────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  role      String   @default("editor")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+model Project {
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique
+  styleGuide Json?    @map("style_guide")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  sources     Source[]
+  stories     Story[]
+  viralBoards ViralBoard[]
+
+  @@map("projects")
+}
+
+// ─── Sources & discovery ────────────────────────────────────────────────────
+
+model Source {
+  id            String    @id @default(cuid())
+  projectId     String    @map("project_id")
+  name          String
+  type          String // manual|rss|url|douyin_board
+  baseUrl       String?   @map("base_url")
+  licenseStatus String    @default("pending") @map("license_status") // cleared|pending|rejected|research_only
+  config        Json?
+  lastSyncedAt  DateTime? @map("last_synced_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items   SourceItem[]
+  stories Story[]
+
+  @@index([projectId])
+  @@map("sources")
+}
+
+model SourceItem {
+  id          String    @id @default(cuid())
+  sourceId    String    @map("source_id")
+  externalKey String    @map("external_key")
+  title       String
+  url         String?
+  publishedAt DateTime? @map("published_at")
+  genre       String[]  @default([])
+  trendScore  Float?    @map("trend_score")
+  metadata    Json?
+  status      String    @default("new")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  source Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, externalKey])
+  @@index([sourceId])
+  @@map("source_items")
+}
+
+// ─── Douyin viral ranking ───────────────────────────────────────────────────
+
+model ViralBoard {
+  id               String    @id @default(cuid())
+  projectId        String    @map("project_id")
+  boardKey         String    @map("board_key")
+  label            String
+  genre            String // required catalog genre
+  genresExtra      String[]  @default([]) @map("genres_extra")
+  adapterConfig    Json?     @map("adapter_config")
+  enabled          Boolean   @default(true)
+  crawlIntervalSec Int       @default(3600) @map("crawl_interval_sec")
+  lastCrawledAt    DateTime? @map("last_crawled_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items     ViralItem[]
+  crawlRuns ViralCrawlRun[]
+
+  @@unique([projectId, boardKey])
+  @@index([projectId, enabled])
+  @@map("viral_boards")
+}
+
+model ViralItem {
+  id              String    @id @default(cuid())
+  boardId         String    @map("board_id")
+  externalId      String    @map("external_id")
+  rankPosition    Int?      @map("rank_position")
+  title           String
+  caption         String?
+  authorHandle    String?   @map("author_handle")
+  stats           Json?
+  hashtags        String[]  @default([])
+  coverUrl        String?   @map("cover_url")
+  canonicalUrl    String?   @map("canonical_url")
+  publishedAt     DateTime? @map("published_at")
+  crawledAt       DateTime  @default(now()) @map("crawled_at")
+  genres          String[]  @default([])
+  genreConfidence Float?    @map("genre_confidence")
+  genreSource     String?   @map("genre_source") // board|ai|editor
+  trendScore      Float?    @map("trend_score")
+  tier            String? // S|A|B|C
+  usagePolicy     String    @default("research_only") @map("usage_policy") // research_only|cleared|blocked
+  rawPayload      Json?     @map("raw_payload")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  board ViralBoard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, externalId])
+  @@index([boardId, tier])
+  @@index([boardId, trendScore])
+  @@map("viral_items")
+}
+
+model ViralCrawlRun {
+  id         String    @id @default(cuid())
+  boardId    String    @map("board_id")
+  status     String    @default("pending")
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  itemCount  Int?      @map("item_count")
+  error      String?
+  meta       Json?
+
+  board ViralBoard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId, startedAt])
+  @@map("viral_crawl_runs")
+}
+
+// ─── Library ────────────────────────────────────────────────────────────────
+
+model Story {
+  id        String   @id @default(cuid())
+  projectId String   @map("project_id")
+  sourceId  String?  @map("source_id")
+  title     String
+  language  String   @default("vi")
+  genre     String[] @default([])
+  tags      String[] @default([])
+  status    String   @default("draft")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  source             Source?             @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  chapters           Chapter[]
+  characters         Character[]
+  abilities          Ability[]
+  locations          Location[]
+  items              Item[]
+  arcs               Arc[]
+  events             Event[]
+  relationships      Relationship[]
+  plotSignals        PlotSignal[]
+  timelineEntries    TimelineEntry[]
+  jobs               Job[]
+  generationOutputs  GenerationOutput[]
+  assets             Asset[]
+
+  @@index([projectId])
+  @@index([status])
+  @@map("stories")
+}
+
+model Chapter {
+  id          String    @id @default(cuid())
+  storyId     String    @map("story_id")
+  number      Int
+  title       String?
+  rawText     String?   @map("raw_text") @db.Text
+  cleanText   String?   @map("clean_text") @db.Text
+  contentHash String?   @map("content_hash")
+  wordCount   Int?      @map("word_count")
+  status      String    @default("imported")
+  importedAt  DateTime? @map("imported_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  story             Story              @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  chunks            StoryChunk[]
+  events            Event[]
+  plotSignals       PlotSignal[]
+  arcsAsStart       Arc[]              @relation("ArcStartChapter")
+  arcsAsEnd         Arc[]              @relation("ArcEndChapter")
+  relationshipsFrom Relationship[]     @relation("RelationshipSinceChapter")
+  generationOutputs GenerationOutput[]
+
+  @@unique([storyId, number])
+  @@unique([storyId, contentHash])
+  @@index([storyId])
+  @@map("chapters")
+}
+
+model StoryChunk {
+  id            String                       @id @default(cuid())
+  chapterId     String                       @map("chapter_id")
+  ordinal       Int
+  text          String                       @db.Text
+  tokenEstimate Int?                         @map("token_estimate")
+  embedding     Unsupported("vector(1536)")?
+  contentHash   String?                      @map("content_hash")
+  createdAt     DateTime                     @default(now()) @map("created_at")
+
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@unique([chapterId, ordinal])
+  @@index([chapterId])
+  @@map("story_chunks")
+}
+
+// ─── Story Graph ────────────────────────────────────────────────────────────
+
+model Character {
+  id         String   @id @default(cuid())
+  storyId    String   @map("story_id")
+  name       String
+  aliases    String[] @default([])
+  role       String?
+  summary    String?  @db.Text
+  attributes Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  story              Story            @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  abilities          Ability[]
+  ownedItems         Item[]           @relation("ItemOwner")
+  eventAppearances   EventCharacter[]
+  relationshipsFrom  Relationship[]   @relation("RelationshipFrom")
+  relationshipsTo    Relationship[]   @relation("RelationshipTo")
+
+  @@index([storyId])
+  @@index([storyId, name])
+  @@map("characters")
+}
+
+model Ability {
+  id          String   @id @default(cuid())
+  storyId     String   @map("story_id")
+  characterId String?  @map("character_id")
+  name        String
+  type        String?
+  description String?  @db.Text
+  powerLevel  Float?   @map("power_level")
+  attributes  Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  story     Story      @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  character Character? @relation(fields: [characterId], references: [id], onDelete: SetNull)
+
+  @@index([storyId])
+  @@index([characterId])
+  @@map("abilities")
+}
+
+model Location {
+  id          String   @id @default(cuid())
+  storyId     String   @map("story_id")
+  name        String
+  type        String?
+  description String?  @db.Text
+  attributes  Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@index([storyId])
+  @@map("locations")
+}
+
+model Item {
+  id               String   @id @default(cuid())
+  storyId          String   @map("story_id")
+  name             String
+  type             String?
+  description      String?  @db.Text
+  ownerCharacterId String?  @map("owner_character_id")
+  attributes       Json?
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  story  Story      @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  owner  Character? @relation("ItemOwner", fields: [ownerCharacterId], references: [id], onDelete: SetNull)
+
+  @@index([storyId])
+  @@index([ownerCharacterId])
+  @@map("items")
+}
+
+model Arc {
+  id             String   @id @default(cuid())
+  storyId        String   @map("story_id")
+  name           String
+  orderIndex     Int      @map("order_index")
+  summary        String?  @db.Text
+  startChapterId String?  @map("start_chapter_id")
+  endChapterId   String?  @map("end_chapter_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  story             Story              @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  startChapter      Chapter?           @relation("ArcStartChapter", fields: [startChapterId], references: [id], onDelete: SetNull)
+  endChapter        Chapter?           @relation("ArcEndChapter", fields: [endChapterId], references: [id], onDelete: SetNull)
+  events            Event[]
+  generationOutputs GenerationOutput[]
+
+  @@index([storyId, orderIndex])
+  @@map("arcs")
+}
+
+model Event {
+  id            String   @id @default(cuid())
+  storyId       String   @map("story_id")
+  chapterId     String   @map("chapter_id")
+  arcId         String?  @map("arc_id")
+  type          String?
+  summary       String   @db.Text
+  importance    Int      @default(0)
+  timelineOrder Int?     @map("timeline_order")
+  payload       Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  story           Story            @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  chapter         Chapter          @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  arc             Arc?             @relation(fields: [arcId], references: [id], onDelete: SetNull)
+  characters      EventCharacter[]
+  timelineEntries TimelineEntry[]
+
+  @@index([storyId])
+  @@index([chapterId])
+  @@index([arcId])
+  @@map("events")
+}
+
+model EventCharacter {
+  eventId     String @map("event_id")
+  characterId String @map("character_id")
+  role        String // actor|victim|mention|...
+
+  event     Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, characterId, role])
+  @@index([characterId])
+  @@map("event_characters")
+}
+
+model Relationship {
+  id              String   @id @default(cuid())
+  storyId         String   @map("story_id")
+  fromCharacterId String   @map("from_character_id")
+  toCharacterId   String   @map("to_character_id")
+  type            String
+  description     String?  @db.Text
+  sinceChapterId  String?  @map("since_chapter_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  story         Story      @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  fromCharacter Character  @relation("RelationshipFrom", fields: [fromCharacterId], references: [id], onDelete: Cascade)
+  toCharacter   Character  @relation("RelationshipTo", fields: [toCharacterId], references: [id], onDelete: Cascade)
+  sinceChapter  Chapter?   @relation("RelationshipSinceChapter", fields: [sinceChapterId], references: [id], onDelete: SetNull)
+
+  @@index([storyId])
+  @@index([fromCharacterId])
+  @@index([toCharacterId])
+  @@map("relationships")
+}
+
+model PlotSignal {
+  id        String   @id @default(cuid())
+  storyId   String   @map("story_id")
+  chapterId String   @map("chapter_id")
+  kind      String // plot_twist|hook|cliffhanger
+  text      String   @db.Text
+  strength  Int      @default(0)
+  payload   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  story   Story   @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@index([storyId])
+  @@index([chapterId])
+  @@map("plot_signals")
+}
+
+model TimelineEntry {
+  id       String  @id @default(cuid())
+  storyId  String  @map("story_id")
+  eventId  String  @map("event_id")
+  position Int
+  label    String?
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([storyId, position])
+  @@index([eventId])
+  @@map("timeline_entries")
+}
+
+// ─── Jobs & outputs ─────────────────────────────────────────────────────────
+
+model Job {
+  id          String    @id @default(cuid())
+  type        String
+  status      String    @default("pending")
+  priority    Int       @default(0)
+  storyId     String?   @map("story_id")
+  payload     Json?
+  result      Json?
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3) @map("max_attempts")
+  error       String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at")
+  startedAt   DateTime? @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+
+  story        Story?        @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  usageEvents  UsageEvent[]
+
+  @@index([status, priority, createdAt])
+  @@index([storyId])
+  @@index([type, status])
+  @@map("jobs")
+}
+
+model PromptTemplate {
+  id           String   @id @default(cuid())
+  key          String
+  version      Int
+  locale       String   @default("vi")
+  body         String   @db.Text
+  modelHint    String?  @map("model_hint")
+  outputSchema Json?    @map("output_schema")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  generationOutputs GenerationOutput[]
+
+  @@unique([key, version])
+  @@index([key, active])
+  @@map("prompt_templates")
+}
+
+model GenerationOutput {
+  id                String   @id @default(cuid())
+  storyId           String   @map("story_id")
+  chapterId         String?  @map("chapter_id")
+  arcId             String?  @map("arc_id")
+  type              String
+  promptTemplateId  String?  @map("prompt_template_id")
+  promptVersion     Int?     @map("prompt_version")
+  inputRef          Json?    @map("input_ref")
+  content           String?  @db.Text
+  contentJson       Json?    @map("content_json")
+  status            String   @default("ready") // ready|reviewed|approved|rejected|archived
+  tokensIn          Int?     @map("tokens_in")
+  tokensOut         Int?     @map("tokens_out")
+  costUsd           Float?   @map("cost_usd")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  story          Story           @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  chapter        Chapter?        @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  arc            Arc?            @relation(fields: [arcId], references: [id], onDelete: SetNull)
+  promptTemplate PromptTemplate? @relation(fields: [promptTemplateId], references: [id], onDelete: SetNull)
+  assets         Asset[]
+
+  @@index([storyId, status])
+  @@index([chapterId])
+  @@index([type])
+  @@map("generation_outputs")
+}
+
+model Asset {
+  id                 String   @id @default(cuid())
+  storyId            String   @map("story_id")
+  generationOutputId String?  @map("generation_output_id")
+  type               String
+  uri                String
+  meta               Json?
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  story            Story             @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  generationOutput GenerationOutput? @relation(fields: [generationOutputId], references: [id], onDelete: SetNull)
+
+  @@index([storyId])
+  @@index([generationOutputId])
+  @@map("assets")
+}
+
+model UsageEvent {
+  id        String   @id @default(cuid())
+  jobId     String?  @map("job_id")
+  provider  String
+  model     String
+  tokensIn  Int?     @map("tokens_in")
+  tokensOut Int?     @map("tokens_out")
+  costUsd   Float?   @map("cost_usd")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  job Job? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@index([createdAt])
+  @@map("usage_events")
+}
