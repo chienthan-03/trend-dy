@@ -16,6 +16,7 @@
 | MVP content | Web Novel, text-first **+ Douyin viral ranking discovery** |
 | Content sources | (1) Manual upload + single licensed URL import for novels (2) **Full-auto Douyin ranking crawl (metadata)** (3) RSS/feed sync: 3-month roadmap |
 | Douyin acquisition | Full-auto crawl of Douyin ranking/hot lists — **studio accepts platform ToS and legal risk** |
+| Douyin top-tier model | **Per-genre boards** + AI genre auto-tag (editor-editable) + score/tier **within genre** (not global Douyin top) |
 | Douyin use in MVP | Trend intelligence only: ranking metadata, captions, stats — **not** auto re-upload / pirate full videos |
 | Review policy | Soft review — outputs usable at `status=ready`; optional status transitions only |
 | Target scale (12 months) | ~5–10 titles/month, ~50–100 chapters/week |
@@ -27,15 +28,20 @@
 **MVP light assets (from script):** voice script (text), SRT cues, scene list, banner text, export zip  
 **MVP discovery scope:**
 - Manual source register + `license_status` for novel sources
-- **DouyinRankingAdapter:** scheduled full-auto crawl of configured ranking boards → `viral_items`
-- Viral items feed Discovery UI + optional “inspire packaging / topic suggest” for novel production
+- **DouyinRankingAdapter:** scheduled full-auto crawl of **genre-whitelisted boards** (1..n boards per genre) → `viral_items`
+- After crawl: **AI genre classify** from caption/hashtags (editor can override) → filter to studio niche
+- **Top-tier = S/A within each genre** via `trend_score` (rank + velocity) + light AI rubric on caption/hook quality
+- Viral S/A items feed Discovery UI + optional “inspire packaging / topic suggest” for novel production
 - **No** automated RSS polling until month 3
 
-**Explicitly out of MVP:** bulk download of Douyin media for republishing, OCR, ASR on Douyin video (month 3+ and only with cleared rights), TTS audio render, Neo4j, multi-tenant SaaS, Movie/Anime/Motion Comic pipelines, auto-publish to YouTube/Douyin
+**Genre catalog (shared enum for stories + viral items):**  
+`movie_recap`, `anime_recap`, `manhwa_recap`, `manhua_recap`, `motion_comic`, `web_novel`, `regression`, `apocalypse`, `system`, `cultivation`, `fantasy`, `zombie`, `survival`
+
+**Explicitly out of MVP:** bulk download of Douyin media for republishing, OCR, ASR on Douyin video (month 3+ and only with cleared rights), TTS audio render, Neo4j, multi-tenant SaaS, Movie/Anime/Motion Comic **production** pipelines (discovery tags for those genres are in MVP; producing those formats is later), auto-publish to YouTube/Douyin
 
 **Legal posture (non-negotiable in product copy):** Ranking crawl may violate Douyin Terms of Service and can create copyright exposure if media is reused. Spec stores **public ranking metadata** for internal editorial research. Any download/ASR/remake path requires explicit `license_status=cleared` (or documented fair-use legal sign-off) before workers proceed. Engineering must implement the Douyin connector as a **replaceable adapter**; this document does **not** specify anti-bot bypass techniques.
 
-**Target genres (full catalog vision):** Movie Recap, Anime Recap, Manhwa Recap, Manhua Recap, Motion Comic, Web Novel, Regression, Apocalypse, System, Cultivation, Fantasy, Zombie, Survival — Web Novel production + Douyin trend discovery in MVP; genre packs land on the 6-month roadmap.
+**Target genres (full catalog vision):** same catalog as above — MVP produces **Web Novel** assets; Douyin discovery tags/filters **all** catalog genres so studio sees top-tier per lane; genre-specific novel production packs land on the 6-month roadmap.
 
 ---
 
@@ -51,12 +57,12 @@
 |---|---|
 | Dashboard (Next.js) | Discovery, Library, Story Graph, Generation, Assets, Queue/Jobs, Review, Export, Analytics |
 | API (NestJS) | Auth, CRUD, enqueue jobs, read models, export |
-| Workers | Import, Understand, Generate, Asset, **Douyin ranking crawl** |
+| Workers | Import, Understand, Generate, Asset, **Douyin crawl + genre classify + tier score** |
 | Postgres + pgvector | Relational SoT + embeddings + viral_items |
 | Redis + BullMQ | Queues, retries, lightweight cache |
 | Object storage (R2/S3) | Raw uploads, export zips, future audio |
 | AI Gateway | Multi-provider LLM/embedding, cost logs, fallbacks |
-| DouyinRankingAdapter | Pluggable connector: fetch ranking boards → normalize metadata |
+| DouyinRankingAdapter | Pluggable connector: fetch **per-genre** ranking boards → normalize metadata |
 
 ### 1.3 Design principles
 
@@ -71,7 +77,7 @@
 
 | Module | MVP | Notes |
 |---|---|---|
-| Content Discovery | Yes (core early) | Manual novel sources + **full-auto Douyin ranking crawl** + trend score; RSS sync still month 3 |
+| Content Discovery | Yes (core early) | Per-genre Douyin boards + AI genre tag + per-genre S/A tier; RSS month 3 |
 | Content Import | Yes | TXT, EPUB, DOCX, PDF, HTML, single URL fetch (novels) |
 | Story Understanding | Yes (core) | Entity extraction → Story Graph |
 | Story Graph | Yes | Relational + JSONB + pgvector |
@@ -117,33 +123,46 @@
 
 ### 2.1 Module — Douyin Viral Ranking (early scope)
 
-**Goal:** Automatically refresh configured Douyin ranking/hot boards so editors see what storytelling formats are winning, then use that signal to pick novels and packaging angles.
+**Goal:** Automatically refresh **genre-whitelisted** Douyin ranking boards, classify items into the studio genre catalog, and surface **top-tier (S/A) per genre** — not a single global “Douyin hot” list.
+
+**Board model (option C — locked):**
+- Each `viral_boards` row has required `genre` (catalog enum) + optional secondary genres
+- Studio configures 1..n boards per genre (hashtag board, hot board, account-set board, etc.)
+- Crawler only runs **enabled** boards (whitelist) — no unbounded whole-platform scrape mandate beyond configured boards
+
+**Pipeline after each crawl:**
+1. Upsert `viral_items` metadata
+2. Job `douyin_genre_classify` — mid-tier LLM (or rules+LLM) on caption/hashtags → `genres[]` + `genre_confidence`; seed from board.genre; editor can PATCH override
+3. Job `douyin_tier_score` — **within each genre**: combine rank, velocity (Δ stats across crawls), engagement density → `trend_score`; light AI rubric on hook/caption quality → `tier` in `{S,A,B,C}`
+4. Discovery UI defaults to filter `tier in (S,A)` + genre tabs
 
 **MVP stores per item (metadata only):**
-- external_id, board_key, rank_position, title/caption, author handle, stats (like/comment/share/play if available), hashtags, cover URL (link only), published_at, crawled_at, raw_payload jsonb
-- `trend_score` (normalized from rank + velocity between crawls)
-- `usage_policy`: default `research_only`
+- external_id, board_id, rank_position, title/caption, author handle, stats, hashtags, cover URL (link only), published_at, crawled_at, raw_payload
+- `genres text[]`, `genre_confidence`, `genre_source` (`board|ai|editor`)
+- `trend_score`, `tier` (`S|A|B|C`), `usage_policy` default `research_only`
 
-**MVP does not:** download video bytes, strip watermarks, mass-repost to other platforms, or bypass documented as “how to evade Douyin defenses.”
+**MVP does not:** download video bytes, strip watermarks, mass-repost, or document anti-bot bypass techniques.
 
-**Scheduler:** BullMQ repeatable job every N minutes/hours (config). Boards configured in `viral_boards`.
+**Scheduler:** BullMQ repeatable job per board (`crawl_interval_sec`). Classify + tier score chain after successful crawl.
 
 **Downstream (MVP):**
-1. Discovery UI list/filter by board, score, hashtag
-2. “Suggest packaging” — pass top captions/hooks as few-shot context into `pack.*` prompts (still generating **original** VI copy for the studio’s novel)
+1. Discovery UI: tabs/filter by **genre**, tier S/A, board, hashtag
+2. “Suggest packaging” — only from S/A items in selected genre as few-shot inspire (original VI copy)
 3. Optional link `viral_item_id` on a `story` as inspiration reference
 
-**Later (not MVP):** cleared-rights ASR → topic extract; competitive script breakdown.
+**Later (not MVP):** cleared-rights ASR → beat/hook formula extract; competitive script breakdown per genre.
 ---
 
 ## 3. Data flow
 
 ```
-⓪ DOUYIN RANKING CRAWL (MVP, scheduled)
-   DouyinRankingAdapter → viral_boards / viral_items (metadata, trend_score)
+⓪ DOUYIN RANKING CRAWL (MVP, scheduled, per-genre boards)
+   DouyinRankingAdapter → viral_items
+   → genre_classify (AI, editor-overridable)
+   → tier_score within genre (S/A/B/C)
    │
-   ├─► Discovery UI (research_only)
-   └─► optional inspire context for pack.* prompts
+   ├─► Discovery UI (genre tabs, default tier S/A, research_only)
+   └─► optional inspire context for pack.* (S/A + matching genre)
         │
 Source register / Upload / single URL (novels)
         │
@@ -209,15 +228,19 @@ source_items (
 -- Douyin viral ranking (MVP early)
 viral_boards (
   id, project_id, board_key, label,
-  adapter_config jsonb, -- board id, locale, interval — no bypass secrets in git
+  genre, -- required catalog enum; primary niche for this board
+  genres_extra text[], -- optional secondary
+  adapter_config jsonb,
   enabled, crawl_interval_sec, last_crawled_at
 )
 viral_items (
   id, board_id, external_id,
   rank_position, title, caption, author_handle,
-  stats jsonb, -- likes, comments, shares, plays
-  hashtags text[], cover_url, canonical_url,
-  published_at, crawled_at, trend_score,
+  stats jsonb, hashtags text[], cover_url, canonical_url,
+  published_at, crawled_at,
+  genres text[], genre_confidence float,
+  genre_source, -- board|ai|editor
+  trend_score, tier, -- S|A|B|C ; scored within genre
   usage_policy, -- research_only|cleared|blocked
   raw_payload jsonb
 )
@@ -436,12 +459,13 @@ Sources / Discovery
   GET /discovery/items              # month 3+ RSS inbox; MVP lists manual sources only
 
 Douyin Viral (MVP)
-  GET|POST /viral/boards
+  GET|POST /viral/boards            # board requires genre
   GET|PATCH /viral/boards/:id
-  POST /viral/boards/:id/crawl      # enqueue full-auto ranking crawl
-  GET /viral/items                  # filter board, score, hashtag, usage_policy
+  POST /viral/boards/:id/crawl      # enqueue ranking crawl
+  GET /viral/items                  # filter genre, tier, board, score, hashtag
   GET /viral/items/:id
-  PATCH /viral/items/:id            # usage_policy cleared|blocked
+  PATCH /viral/items/:id            # usage_policy; genres override (genre_source=editor); tier override optional
+  GET /viral/genres/top             # convenience: S/A items grouped by genre
   GET /viral/crawl-runs
 
 Library
@@ -491,7 +515,7 @@ Admin
 
 | Queue | Concurrency (MVP) | Job names |
 |---|---|---|
-| `discovery` | 1 | `douyin_rank_crawl`, `douyin_trend_score`; month 3+: `rss_sync` |
+| `discovery` | 2 | `douyin_rank_crawl`, `douyin_genre_classify`, `douyin_tier_score`; month 3+: `rss_sync` |
 | `import` | 2 | `parse_file`, `fetch_url`, `chunk_embed` |
 | `understand` | 2 | `extract_chapter`, `resolve_entities`, `rollup_arcs` |
 | `generate` | 3 | `gen_<type>` |
@@ -516,20 +540,19 @@ MVP: one Node worker process consuming all queues (named processors). Scale by a
 
 | Week | Deliverable |
 |---|---|
-| 1–2 | Auth, projects/stories/chapters CRUD, manual source register + license gate, TXT/EPUB upload + single URL import, parse, chunk, embed; **Douyin board config + ranking crawl adapter skeleton + viral_items persist + Discovery Viral UI** |
-| 3–4 | Understand worker, Story Graph tables, chapter summary; **minimal** arc rollup (heuristic chapter ranges → `arcs` rows) so arc-scoped generate works; trend_score + crawl scheduler hardening |
-| 5 | Generate: chapter/arc summary, narration script, video outline; optional viral-inspire for packaging context |
-| 6 | Packaging outputs, light assets (voice script text, SRT, scene list, banner text), Jobs UI, thin Review (edit content + change `status`), export zip, usage/cost logging |
+| 1–2 | Auth, projects/stories/chapters CRUD, manual source register + license gate, TXT/EPUB upload + single URL import, parse, chunk, embed; **per-genre Douyin boards + crawl adapter + viral_items + genre classify + tier score + Discovery Viral UI (genre tabs, S/A default)** |
+| 3–4 | Understand worker, Story Graph tables, chapter summary; **minimal** arc rollup; harden crawl scheduler + per-genre top lists |
+| 5 | Generate: chapter/arc summary, narration script, video outline; viral-inspire from **S/A + matching genre** |
+| 6 | Packaging outputs, light assets, Jobs UI, thin Review, export zip, usage/cost logging |
 
 **Not in 6-week MVP:** Douyin full-video download/ASR/repost, automated RSS/feed polling, TTS audio files, polished Review workflow UI (that lands month 3).
 
 **MVP success criteria**
 
-- Scheduled Douyin ranking crawl fills Discovery Viral board with metadata + trend_score
-- Register a cleared novel source and import a web novel (file or single cleared URL) end-to-end
-- Story Graph populated for ≥1 arc worth of chapters
-- Produce VI script + packaging (+ optional viral-inspired hooks) + light text assets and download zip
-- Cost per chapter visible in analytics; crawl run history visible
+- Per-genre boards crawl on schedule; items get AI genres (editable) + tier S/A/B/C **within genre**
+- Discovery shows Top S/A filtered by genre tabs
+- Import cleared web novel → Story Graph → VI script/packaging (+ optional viral inspire) → export zip
+- Cost + crawl run history visible
 
 ---
 
@@ -674,7 +697,7 @@ At locked scale A, a single VPS/Docker Compose stack is acceptable for MVP–3 m
 
 ## Appendix B — Dashboard information architecture
 
-1. **Discovery** — Douyin Viral board (MVP) + manual novel sources/license badges; RSS inbox from month 3  
+1. **Discovery** — Douyin Viral by **genre tabs** (default tier S/A) + manual novel sources/license; RSS month 3  
 2. **Library** — stories, chapters, import actions  
 3. **Story Graph** — characters, arcs, timeline, relationships (read-mostly MVP)  
 4. **AI Generation** — pick type, enqueue, browse outputs  
@@ -717,8 +740,9 @@ At locked scale A, a single VPS/Docker Compose stack is acceptable for MVP–3 m
 - Embedding dimensions locked to chosen model  
 - Vietnamese FTS config quality may need manual tuning  
 - Human repair UI for failed EPUB/PDF parses (minimal: re-upload cleaned TXT)  
-- **DouyinRankingAdapter concrete provider** chosen at implementation (official partner vs internal connector) — must stay behind interface; legal review by studio before production crawl volume  
-- Which ranking boards / categories to track for “Duyn-style” storytelling (config, not hard-coded)  
+- **DouyinRankingAdapter concrete provider** behind interface; legal review before production crawl volume  
+- Initial board whitelist map: which Douyin boards ↔ which catalog genres (studio config)  
+- Tier thresholds (S/A cutoffs) tunable per genre in config, not hard-coded forever  
 
 ---
 
