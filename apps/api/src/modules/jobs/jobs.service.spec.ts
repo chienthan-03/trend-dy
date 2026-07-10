@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Queue } from "bullmq";
 import { JobsService } from "./jobs.service";
 import type { PrismaService } from "../../prisma/prisma.service";
+import type { BudgetGuard } from "../usage/budget.guard";
 
 type MockQueue = {
   add: ReturnType<typeof vi.fn>;
@@ -12,6 +13,11 @@ type MockQueue = {
 const createMockQueue = (): MockQueue => ({
   add: vi.fn().mockResolvedValue({ id: "bull-job" }),
   getJob: vi.fn().mockResolvedValue(null),
+});
+
+const createBudgetGuard = () => ({
+  assertWithinDailyBudget: vi.fn().mockResolvedValue(undefined),
+  getTodaySpendUsd: vi.fn().mockResolvedValue(0),
 });
 
 const createService = (
@@ -31,15 +37,18 @@ const createService = (
     assetQueue?: MockQueue;
     discoveryQueue?: MockQueue;
   },
+  budgetGuard?: ReturnType<typeof createBudgetGuard>,
 ) => {
   const importQueue = queues?.importQueue ?? createMockQueue();
   const understandQueue = queues?.understandQueue ?? createMockQueue();
   const generateQueue = queues?.generateQueue ?? createMockQueue();
   const assetQueue = queues?.assetQueue ?? createMockQueue();
   const discoveryQueue = queues?.discoveryQueue ?? createMockQueue();
+  const guard = budgetGuard ?? createBudgetGuard();
 
   const service = new JobsService(
     prisma as unknown as PrismaService,
+    guard as unknown as BudgetGuard,
     importQueue as unknown as Queue,
     understandQueue as unknown as Queue,
     generateQueue as unknown as Queue,
@@ -54,6 +63,7 @@ const createService = (
     generateQueue,
     assetQueue,
     discoveryQueue,
+    budgetGuard: guard,
   };
 };
 

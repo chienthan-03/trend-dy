@@ -12,6 +12,8 @@ import { map, startWith, switchMap, takeWhile } from "rxjs/operators";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { QueueName } from "../../queue/queues";
 import { markFailed } from "../../workers/job-status";
+import { isAiBudgetedJobType } from "../usage/ai-job-types";
+import { BudgetGuard } from "../usage/budget.guard";
 import { resolveQueueName } from "./job-type-to-queue";
 
 const TERMINAL_JOB_STATUSES = ["completed", "failed", "cancelled"] as const;
@@ -47,6 +49,7 @@ export class JobsService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly budgetGuard: BudgetGuard,
     @InjectQueue("import") importQueue: Queue,
     @InjectQueue("understand") understandQueue: Queue,
     @InjectQueue("generate") generateQueue: Queue,
@@ -69,6 +72,10 @@ export class JobsService {
   async enqueue(input: EnqueueInput): Promise<EnqueueResult> {
     const { type, storyId, idempotencyKey } = input;
     const basePayload = { ...(input.payload ?? {}) };
+
+    if (isAiBudgetedJobType(type)) {
+      await this.budgetGuard.assertWithinDailyBudget();
+    }
 
     if (idempotencyKey) {
       const existing = await this.findActiveByIdempotencyKey(idempotencyKey);
@@ -146,6 +153,10 @@ export class JobsService {
 
   async retry(id: string): Promise<EnqueueResult> {
     const job = await this.findById(id);
+
+    if (isAiBudgetedJobType(job.type)) {
+      await this.budgetGuard.assertWithinDailyBudget();
+    }
 
     if (job.status !== "failed") {
       throw new BadRequestException(

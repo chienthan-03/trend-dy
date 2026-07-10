@@ -179,6 +179,39 @@ export const GENERATION_TYPES = [
 
 export type GenerationType = (typeof GENERATION_TYPES)[number];
 
+export type UsageReport = {
+  totals: {
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number;
+  };
+  today: {
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number;
+  };
+  budget: {
+    dailyCapUsd: number | null;
+    todaySpendUsd: number;
+    remainingUsd: number | null;
+    exceeded: boolean;
+  };
+  byDay: Array<{
+    date: string;
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number;
+  }>;
+  byModel: Array<{
+    model: string;
+    provider: string;
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number;
+    count: number;
+  }>;
+};
+
 export const api = {
   projects: {
     list: () => apiFetch<Project[]>("/projects"),
@@ -297,5 +330,8 @@ export const api = {
       apiFetch<{ jobId: string; status: string }>(`/jobs/${id}/retry`, {
         method: "POST",
       }),
+  },
+  analytics: {
+    usage: () => apiFetch<UsageReport>("/analytics/usage"),
   },
 };

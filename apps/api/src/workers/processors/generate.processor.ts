@@ -11,6 +11,7 @@ import { ContextBuilder } from "../../modules/generate/context-builder";
 import { parseInspireFromViralOptions } from "../../modules/generate/inspire-from-viral";
 import { GenerateService } from "../../modules/generate/generate.service";
 import { PromptsService } from "../../modules/prompts/prompts.service";
+import { estimateLlmCostUsd } from "../../modules/usage/cost";
 import { PrismaService } from "../../prisma/prisma.service";
 import { QUEUE_NAMES } from "../../queue/queues";
 import { markCompleted, markFailed, markStarted } from "../job-status";
@@ -145,6 +146,7 @@ export class GenerateProcessor extends WorkerHost {
         model: llm.model,
         tokensIn: llm.tokensIn,
         tokensOut: llm.tokensOut,
+        costUsd: estimateLlmCostUsd(llm.tokensIn, llm.tokensOut),
       },
     });
 

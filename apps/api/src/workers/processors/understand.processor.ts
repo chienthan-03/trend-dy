@@ -8,6 +8,7 @@ import {
 } from "../../ai/prompts/extract.chapter.v1";
 import { ArcRollupService } from "../../modules/understand/arc-rollup.service";
 import { ExtractService } from "../../modules/understand/extract.service";
+import { estimateLlmCostUsd } from "../../modules/usage/cost";
 import { PrismaService } from "../../prisma/prisma.service";
 import { QUEUE_NAMES } from "../../queue/queues";
 import {
@@ -117,6 +118,7 @@ export class UnderstandProcessor extends WorkerHost {
         model: llm.model,
         tokensIn: llm.tokensIn,
         tokensOut: llm.tokensOut,
+        costUsd: estimateLlmCostUsd(llm.tokensIn, llm.tokensOut),
       },
     });
 
