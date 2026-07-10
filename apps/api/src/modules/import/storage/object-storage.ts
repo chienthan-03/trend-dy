@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export type ObjectStorage = {
   putObject: (
@@ -11,6 +12,7 @@ export type ObjectStorage = {
     contentType?: string,
   ) => Promise<void>;
   getObject: (key: string) => Promise<Buffer>;
+  getSignedDownloadUrl: (key: string, expiresInSeconds?: number) => Promise<string>;
 };
 
 export type S3EnvConfig = {
@@ -66,6 +68,12 @@ export const createObjectStorage = (
     }
     return Buffer.from(bytes);
   },
+  getSignedDownloadUrl: async (key, expiresInSeconds = 3600) =>
+    getSignedUrl(
+      client,
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+      { expiresIn: expiresInSeconds },
+    ),
 });
 
 export const OBJECT_STORAGE = Symbol("OBJECT_STORAGE");

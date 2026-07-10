@@ -4,6 +4,7 @@ import { NestFactory } from "@nestjs/core";
 import { Processor, WorkerHost } from "@nestjs/bullmq";
 import type { Job } from "bullmq";
 import { GenerateModule } from "../modules/generate/generate.module";
+import { AssetsModule } from "../modules/assets/assets.module";
 import { ImportModule } from "../modules/import/import.module";
 import { JobsModule } from "../modules/jobs/jobs.module";
 import { UnderstandModule } from "../modules/understand/understand.module";
@@ -11,17 +12,11 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { QueueModule } from "../queue/queue.module";
 import { QUEUE_NAMES } from "../queue/queues";
 import { GenerateProcessor } from "./processors/generate.processor";
+import { AssetProcessor } from "./processors/asset.processor";
 import { ImportProcessor } from "./processors/import.processor";
 import { UnderstandProcessor } from "./processors/understand.processor";
 
-const [, , GENERATE_Q, ASSET_Q, DISCOVERY_Q] = QUEUE_NAMES;
-
-@Processor(ASSET_Q)
-class AssetNoopProcessor extends WorkerHost {
-  async process(_job: Job): Promise<void> {
-    // noop — real asset processor lands in a later task
-  }
-}
+const [, , GENERATE_Q, , DISCOVERY_Q] = QUEUE_NAMES;
 
 @Processor(DISCOVERY_Q)
 class DiscoveryNoopProcessor extends WorkerHost {
@@ -38,12 +33,13 @@ class DiscoveryNoopProcessor extends WorkerHost {
     ImportModule,
     UnderstandModule,
     GenerateModule,
+    AssetsModule,
   ],
   providers: [
     ImportProcessor,
     UnderstandProcessor,
     GenerateProcessor,
-    AssetNoopProcessor,
+    AssetProcessor,
     DiscoveryNoopProcessor,
   ],
 })
@@ -53,7 +49,7 @@ const bootstrap = async () => {
   const app = await NestFactory.createApplicationContext(WorkerModule);
   app.enableShutdownHooks();
   console.log(
-    `Worker started — ImportProcessor, UnderstandProcessor, GenerateProcessor + noop processors for ${ASSET_Q}, ${DISCOVERY_Q}`,
+    `Worker started — ImportProcessor, UnderstandProcessor, GenerateProcessor, AssetProcessor + noop processor for ${DISCOVERY_Q}`,
   );
 };
 

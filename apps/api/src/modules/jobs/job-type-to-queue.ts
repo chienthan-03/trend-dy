@@ -23,8 +23,10 @@ const KNOWN_JOB_TYPES: Record<string, QueueName> = {
   extract_chapter: "understand",
   resolve_entities: "understand",
   rollup_arcs: "understand",
+  asset_voice_script: "asset",
   build_srt: "asset",
   scene_list: "asset",
+  asset_banner_text: "asset",
   export_zip: "asset",
 };
 

@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AssetsModule } from "./modules/assets/assets.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { GenerateModule } from "./modules/generate/generate.module";
 import { ImportModule } from "./modules/import/import.module";
@@ -24,6 +25,7 @@ import { QueueModule } from "./queue/queue.module";
     UnderstandModule,
     PromptsModule,
     GenerateModule,
+    AssetsModule,
   ],
 })
 export class AppModule {}
