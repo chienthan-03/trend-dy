@@ -1,0 +1,301 @@
+const API_BASE = "/api/v1";
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: unknown,
+  ) {
+    super(`API error ${status}`);
+    this.name = "ApiError";
+  }
+}
+
+const parseErrorMessage = (body: unknown): string => {
+  if (!body || typeof body !== "object") return "Request failed";
+  const record = body as { message?: string | string[]; error?: { message?: string } };
+  if (Array.isArray(record.message)) return record.message.join(", ");
+  if (typeof record.message === "string") return record.message;
+  if (record.error?.message) return record.error.message;
+  return "Request failed";
+};
+
+export const apiFetch = async <T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> => {
+  const isFormData = options.body instanceof FormData;
+  const headers: HeadersInit = {
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
+    ...options.headers,
+  };
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    credentials: "include",
+    headers,
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(response.status, body);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return response.json() as Promise<T>;
+};
+
+export const getErrorMessage = (error: unknown): string => {
+  if (error instanceof ApiError) return parseErrorMessage(error.body);
+  if (error instanceof Error) return error.message;
+  return "Something went wrong";
+};
+
+export type Project = {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+};
+
+export type Source = {
+  id: string;
+  projectId: string;
+  name: string;
+  type: string;
+  baseUrl: string | null;
+  licenseStatus: string;
+};
+
+export type ViralBoard = {
+  id: string;
+  projectId: string;
+  boardKey: string;
+  label: string;
+  genre: string;
+  enabled: boolean;
+  crawlIntervalSec: number;
+  lastCrawledAt: string | null;
+};
+
+export type ViralItem = {
+  id: string;
+  boardId: string;
+  title: string;
+  caption: string | null;
+  authorHandle: string | null;
+  hashtags: string[];
+  tier: string | null;
+  trendScore: number | null;
+  genres: string[];
+  usagePolicy: string;
+  crawledAt: string;
+};
+
+export type ViralCrawlRun = {
+  id: string;
+  boardId: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  itemCount: number | null;
+  error: string | null;
+};
+
+export type Story = {
+  id: string;
+  projectId: string;
+  title: string;
+  language: string;
+  genre: string[];
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Chapter = {
+  id: string;
+  storyId: string;
+  number: number;
+  title: string | null;
+  status: string;
+  wordCount: number | null;
+};
+
+export type StoryGraph = {
+  characters: Array<{ id: string; name: string; role: string | null }>;
+  arcs: Array<{ id: string; title: string; summary: string | null; orderIndex: number }>;
+  events: Array<{
+    id: string;
+    type: string;
+    summary: string | null;
+    importance: number | null;
+    characters: Array<{ id: string; name: string; role: string | null }>;
+  }>;
+  relationships: Array<{
+    id: string;
+    type: string;
+    description: string | null;
+    from: { id: string; name: string };
+    to: { id: string; name: string };
+  }>;
+};
+
+export type GenerationOutput = {
+  id: string;
+  storyId: string;
+  type: string;
+  content: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Job = {
+  id: string;
+  type: string;
+  status: string;
+  storyId: string | null;
+  error: string | null;
+  attempts: number;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export const GENERATION_TYPES = [
+  "summary.chapter",
+  "summary.arc",
+  "script.narration",
+  "outline.video",
+  "pack.title",
+  "pack.thumbnail_text",
+  "pack.description",
+  "pack.tags",
+  "pack.hook_3s",
+] as const;
+
+export type GenerationType = (typeof GENERATION_TYPES)[number];
+
+export const api = {
+  projects: {
+    list: () => apiFetch<Project[]>("/projects"),
+    create: (body: { name: string; slug: string }) =>
+      apiFetch<Project>("/projects", { method: "POST", body: JSON.stringify(body) }),
+  },
+  sources: {
+    list: (projectId?: string) =>
+      apiFetch<Source[]>(
+        `/sources${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+      ),
+    create: (body: {
+      projectId: string;
+      name: string;
+      type: string;
+      baseUrl?: string;
+      licenseStatus: string;
+    }) =>
+      apiFetch<Source>("/sources", { method: "POST", body: JSON.stringify(body) }),
+  },
+  viral: {
+    listBoards: (projectId?: string) =>
+      apiFetch<ViralBoard[]>(
+        `/viral/boards${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+      ),
+    triggerCrawl: (boardId: string) =>
+      apiFetch<{ jobId: string; status: string }>(`/viral/boards/${boardId}/crawl`, {
+        method: "POST",
+      }),
+    listItems: (params: {
+      projectId?: string;
+      genre?: string;
+      tier?: string;
+      boardId?: string;
+    }) => {
+      const query = new URLSearchParams();
+      if (params.projectId) query.set("projectId", params.projectId);
+      if (params.genre) query.set("genre", params.genre);
+      if (params.tier) query.set("tier", params.tier);
+      if (params.boardId) query.set("boardId", params.boardId);
+      const qs = query.toString();
+      return apiFetch<ViralItem[]>(`/viral/items${qs ? `?${qs}` : ""}`);
+    },
+    listCrawlRuns: (boardId?: string) =>
+      apiFetch<ViralCrawlRun[]>(
+        `/viral/crawl-runs${boardId ? `?boardId=${encodeURIComponent(boardId)}` : ""}`,
+      ),
+  },
+  stories: {
+    list: (projectId?: string) =>
+      apiFetch<Story[]>(
+        `/stories${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+      ),
+    get: (id: string) => apiFetch<Story>(`/stories/${id}`),
+    create: (body: { projectId: string; title: string }) =>
+      apiFetch<Story>("/stories", { method: "POST", body: JSON.stringify(body) }),
+    update: (id: string, body: { status?: string; title?: string }) =>
+      apiFetch<Story>(`/stories/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    listChapters: (id: string) => apiFetch<Chapter[]>(`/stories/${id}/chapters`),
+    understand: (id: string) =>
+      apiFetch<{ jobId: string; status: string }>(`/stories/${id}/understand`, {
+        method: "POST",
+      }),
+    graph: (id: string) => apiFetch<StoryGraph>(`/stories/${id}/graph`),
+    importFile: (id: string, file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      return apiFetch<{ jobId: string; status: string }>(`/stories/${id}/import`, {
+        method: "POST",
+        body: form,
+      });
+    },
+    importUrl: (id: string, url: string) =>
+      apiFetch<{ jobId: string; status: string }>(`/stories/${id}/import`, {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      }),
+    generate: (
+      id: string,
+      body: {
+        type: GenerationType;
+        chapterId?: string;
+        options?: Record<string, unknown>;
+      },
+    ) =>
+      apiFetch<{ jobId: string; status: string }>(`/stories/${id}/generate`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    listOutputs: (id: string) => apiFetch<GenerationOutput[]>(`/stories/${id}/outputs`),
+    exportZip: (id: string, outputIds?: string[]) =>
+      apiFetch<{ storyId: string; key: string; downloadUrl: string }>(
+        `/stories/${id}/export`,
+        {
+          method: "POST",
+          body: JSON.stringify({ format: "zip", outputIds }),
+        },
+      ),
+  },
+  outputs: {
+    update: (id: string, body: { content?: string; status?: string }) =>
+      apiFetch<GenerationOutput>(`/outputs/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+  },
+  jobs: {
+    list: (params?: { storyId?: string; status?: string }) => {
+      const query = new URLSearchParams();
+      if (params?.storyId) query.set("storyId", params.storyId);
+      if (params?.status) query.set("status", params.status);
+      const qs = query.toString();
+      return apiFetch<Job[]>(`/jobs${qs ? `?${qs}` : ""}`);
+    },
+    retry: (id: string) =>
+      apiFetch<{ jobId: string; status: string }>(`/jobs/${id}/retry`, {
+        method: "POST",
+      }),
+  },
+};

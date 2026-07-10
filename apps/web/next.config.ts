@@ -6,6 +6,7 @@ import type { NextConfig } from "next";
  * so the httpOnly `session` cookie is set for localhost:3000.
  */
 const nextConfig: NextConfig = {
+  transpilePackages: ["@factory/shared"],
   async rewrites() {
     const apiOrigin = process.env.API_ORIGIN ?? "http://localhost:3001";
     return [

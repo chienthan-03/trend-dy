@@ -28,7 +28,7 @@ const LoginPage = () => {
         return;
       }
 
-      router.push("/");
+      router.push("/discovery");
       router.refresh();
     } catch {
       setError("Unable to reach the API");

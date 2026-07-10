@@ -1,220 +1,384 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { GENRES, VIRAL_TIERS, type Genre, type ViralTier } from "@factory/shared";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  formatGenre,
+  Input,
+  Label,
+  PageHeader,
+  Select,
+  TierBadge,
+} from "@/components/ui";
+import {
+  api,
+  getErrorMessage,
+  type Source,
+  type ViralBoard,
+  type ViralCrawlRun,
+  type ViralItem,
+} from "@/lib/api-client";
+import { useProject } from "@/lib/project-context";
 
-type Source = {
-  id: string;
-  projectId: string;
-  name: string;
-  type: string;
-  baseUrl: string | null;
-  licenseStatus: string;
-};
+const DEFAULT_TIERS: ViralTier[] = ["S", "A"];
 
 const DiscoveryPage = () => {
+  const { projectId } = useProject();
+  const [genre, setGenre] = useState<Genre>(GENRES[0]);
+  const [tiers, setTiers] = useState<ViralTier[]>(DEFAULT_TIERS);
+  const [boards, setBoards] = useState<ViralBoard[]>([]);
+  const [items, setItems] = useState<ViralItem[]>([]);
+  const [crawlRuns, setCrawlRuns] = useState<ViralCrawlRun[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [name, setName] = useState("");
-  const [type, setType] = useState("manual");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [licenseStatus, setLicenseStatus] = useState("pending");
+  const [selectedBoardId, setSelectedBoardId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [crawlPending, setCrawlPending] = useState<string | null>(null);
 
-  const loadSources = useCallback(async () => {
+  const [sourceName, setSourceName] = useState("");
+  const [sourceType, setSourceType] = useState("manual");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [licenseStatus, setLicenseStatus] = useState("pending");
+
+  const genreBoards = useMemo(
+    () => boards.filter((board) => board.genre === genre),
+    [boards, genre],
+  );
+
+  const loadData = useCallback(async () => {
+    if (!projectId) return;
     setError(null);
     try {
-      const query = projectId
-        ? `?projectId=${encodeURIComponent(projectId)}`
-        : "";
-      const response = await fetch(`/api/v1/sources${query}`, {
-        credentials: "include",
-      });
-      if (!response.ok) {
-        setError("Failed to load sources (are you signed in?)");
-        return;
-      }
-      const data = (await response.json()) as Source[];
-      setSources(data);
-    } catch {
-      setError("Unable to reach the API");
+      const [boardList, sourceList, runs] = await Promise.all([
+        api.viral.listBoards(projectId),
+        api.sources.list(projectId),
+        api.viral.listCrawlRuns(selectedBoardId || undefined),
+      ]);
+      setBoards(boardList);
+      setSources(sourceList);
+      setCrawlRuns(runs);
+
+      const tierFetches = tiers.map((tier) =>
+        api.viral.listItems({ projectId, genre, tier }),
+      );
+      const tierResults = await Promise.all(tierFetches);
+      const merged = tierResults
+        .flat()
+        .sort((a, b) => (b.trendScore ?? 0) - (a.trendScore ?? 0));
+      const seen = new Set<string>();
+      setItems(
+        merged.filter((item) => {
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        }),
+      );
+    } catch (err) {
+      setError(getErrorMessage(err));
     }
-  }, [projectId]);
+  }, [projectId, genre, tiers, selectedBoardId]);
 
   useEffect(() => {
-    void loadSources();
-  }, [loadSources]);
+    void loadData();
+  }, [loadData]);
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const handleTierToggle = (tier: ViralTier) => {
+    setTiers((current) =>
+      current.includes(tier)
+        ? current.filter((value) => value !== tier)
+        : [...current, tier],
+    );
+  };
+
+  const handleCrawl = async (boardId: string) => {
+    setCrawlPending(boardId);
     setError(null);
-    setPending(true);
-
     try {
-      const response = await fetch("/api/v1/sources", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          projectId,
-          name,
-          type,
-          ...(baseUrl ? { baseUrl } : {}),
-          licenseStatus,
-        }),
+      await api.viral.triggerCrawl(boardId);
+      await loadData();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setCrawlPending(null);
+    }
+  };
+
+  const handleSourceSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!projectId) return;
+    setPending(true);
+    setError(null);
+    try {
+      await api.sources.create({
+        projectId,
+        name: sourceName,
+        type: sourceType,
+        licenseStatus,
+        ...(sourceUrl ? { baseUrl: sourceUrl } : {}),
       });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          message?: string | string[];
-        } | null;
-        const message = Array.isArray(body?.message)
-          ? body.message.join(", ")
-          : body?.message;
-        setError(message ?? "Failed to create source");
-        return;
-      }
-
-      setName("");
-      setBaseUrl("");
-      setLicenseStatus("pending");
-      await loadSources();
-    } catch {
-      setError("Unable to reach the API");
+      setSourceName("");
+      setSourceUrl("");
+      await loadData();
+    } catch (err) {
+      setError(getErrorMessage(err));
     } finally {
       setPending(false);
     }
   };
 
   return (
-    <main
-      style={{
-        fontFamily: "system-ui, sans-serif",
-        padding: "1.5rem",
-        maxWidth: "48rem",
-        margin: "0 auto",
-        display: "grid",
-        gap: "1.5rem",
-      }}
-    >
-      <header>
-        <h1 style={{ margin: 0, fontSize: "1.5rem" }}>Discovery</h1>
-        <p style={{ margin: "0.5rem 0 0", color: "#555" }}>
-          Manual sources register (stub — polish in Task 14)
-        </p>
-      </header>
+    <div className="space-y-6">
+      <PageHeader
+        title="Discovery"
+        description="Douyin viral boards by genre (default tier S/A) and manual novel sources."
+      />
 
-      <section aria-labelledby="sources-form-heading">
-        <h2 id="sources-form-heading" style={{ fontSize: "1.125rem" }}>
-          Register source
-        </h2>
-        <form
-          onSubmit={handleSubmit}
-          aria-label="Create source"
-          style={{ display: "grid", gap: "0.75rem", maxWidth: "28rem" }}
+      {error ? <Alert>{error}</Alert> : null}
+
+      <Card title="Genre">
+        <div
+          role="tablist"
+          aria-label="Genres"
+          className="flex flex-wrap gap-2"
         >
-          <label style={{ display: "grid", gap: "0.25rem" }}>
-            <span>Project ID</span>
-            <input
-              name="projectId"
+          {GENRES.map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={genre === value}
+              onClick={() => setGenre(value)}
+              className={`rounded-full px-3 py-1 text-sm font-medium transition ${
+                genre === value
+                  ? "bg-gray-900 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+            >
+              {formatGenre(value)}
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <span className="text-sm text-gray-600">Tier filter:</span>
+          {VIRAL_TIERS.map((tier) => (
+            <label key={tier} className="flex items-center gap-1.5 text-sm">
+              <input
+                type="checkbox"
+                checked={tiers.includes(tier)}
+                onChange={() => handleTierToggle(tier)}
+                aria-label={`Tier ${tier}`}
+              />
+              <TierBadge tier={tier} />
+            </label>
+          ))}
+        </div>
+      </Card>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card title="Boards">
+          {genreBoards.length === 0 ? (
+            <EmptyState>No boards for this genre.</EmptyState>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {genreBoards.map((board) => (
+                <li
+                  key={board.id}
+                  className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+                >
+                  <div>
+                    <p className="font-medium">{board.label}</p>
+                    <p className="text-xs text-gray-500">
+                      {board.boardKey} ·{" "}
+                      {board.enabled ? (
+                        <Badge tone="success">enabled</Badge>
+                      ) : (
+                        <Badge>disabled</Badge>
+                      )}
+                      {board.lastCrawledAt
+                        ? ` · last crawl ${new Date(board.lastCrawledAt).toLocaleString()}`
+                        : " · never crawled"}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => setSelectedBoardId(board.id)}
+                      aria-pressed={selectedBoardId === board.id}
+                    >
+                      History
+                    </Button>
+                    <Button
+                      onClick={() => handleCrawl(board.id)}
+                      disabled={crawlPending === board.id}
+                      aria-label={`Crawl ${board.label}`}
+                    >
+                      {crawlPending === board.id ? "Crawling…" : "Crawl now"}
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card title="Crawl run history">
+          {selectedBoardId ? (
+            <p className="mb-2 text-xs text-gray-500">
+              Board: {boards.find((b) => b.id === selectedBoardId)?.label}
+            </p>
+          ) : (
+            <p className="mb-2 text-xs text-gray-500">All boards (latest 100)</p>
+          )}
+          {crawlRuns.length === 0 ? (
+            <EmptyState>No crawl runs yet.</EmptyState>
+          ) : (
+            <ul className="max-h-64 space-y-2 overflow-y-auto text-sm">
+              {crawlRuns.map((run) => (
+                <li
+                  key={run.id}
+                  className="rounded border border-gray-100 px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge
+                      tone={
+                        run.status === "completed"
+                          ? "success"
+                          : run.status === "failed"
+                            ? "danger"
+                            : "warning"
+                      }
+                    >
+                      {run.status}
+                    </Badge>
+                    <span className="text-xs text-gray-500">
+                      {new Date(run.startedAt).toLocaleString()}
+                    </span>
+                  </div>
+                  {run.itemCount != null ? (
+                    <p className="mt-1 text-xs text-gray-600">
+                      {run.itemCount} items
+                    </p>
+                  ) : null}
+                  {run.error ? (
+                    <p className="mt-1 text-xs text-red-600">{run.error}</p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <Card title={`Top viral items · ${formatGenre(genre)}`}>
+        {items.length === 0 ? (
+          <EmptyState>No items for this genre and tier filter.</EmptyState>
+        ) : (
+          <ul className="divide-y divide-gray-100">
+            {items.map((item) => (
+              <li key={item.id} className="py-3 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-start gap-2">
+                  <TierBadge tier={item.tier} />
+                  <Badge>{item.usagePolicy}</Badge>
+                  <p className="font-medium">{item.title}</p>
+                </div>
+                {item.caption ? (
+                  <p className="mt-1 line-clamp-2 text-sm text-gray-600">
+                    {item.caption}
+                  </p>
+                ) : null}
+                <p className="mt-1 text-xs text-gray-500">
+                  {item.authorHandle ? `@${item.authorHandle} · ` : ""}
+                  score {item.trendScore?.toFixed(2) ?? "—"}
+                  {item.hashtags.length > 0
+                    ? ` · ${item.hashtags.slice(0, 5).join(" ")}`
+                    : ""}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card title="Manual sources & license">
+        <form
+          onSubmit={handleSourceSubmit}
+          className="mb-6 grid max-w-md gap-3"
+          aria-label="Register source"
+        >
+          <div className="grid gap-1">
+            <Label htmlFor="source-name">Name</Label>
+            <Input
+              id="source-name"
               required
-              value={projectId}
-              onChange={(event) => setProjectId(event.target.value)}
-              aria-label="Project ID"
+              value={sourceName}
+              onChange={(e) => setSourceName(e.target.value)}
             />
-          </label>
-          <label style={{ display: "grid", gap: "0.25rem" }}>
-            <span>Name</span>
-            <input
-              name="name"
-              required
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              aria-label="Source name"
-            />
-          </label>
-          <label style={{ display: "grid", gap: "0.25rem" }}>
-            <span>Type</span>
-            <select
-              name="type"
-              value={type}
-              onChange={(event) => setType(event.target.value)}
-              aria-label="Source type"
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="source-type">Type</Label>
+            <Select
+              id="source-type"
+              value={sourceType}
+              onChange={(e) => setSourceType(e.target.value)}
             >
               <option value="manual">manual</option>
               <option value="url">url</option>
               <option value="rss">rss</option>
               <option value="douyin_board">douyin_board</option>
-            </select>
-          </label>
-          <label style={{ display: "grid", gap: "0.25rem" }}>
-            <span>Base URL (optional)</span>
-            <input
-              name="baseUrl"
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="source-url">Base URL (optional)</Label>
+            <Input
+              id="source-url"
               type="url"
-              value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
-              aria-label="Base URL"
+              value={sourceUrl}
+              onChange={(e) => setSourceUrl(e.target.value)}
             />
-          </label>
-          <label style={{ display: "grid", gap: "0.25rem" }}>
-            <span>License status</span>
-            <select
-              name="licenseStatus"
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="license-status">License status</Label>
+            <Select
+              id="license-status"
               value={licenseStatus}
-              onChange={(event) => setLicenseStatus(event.target.value)}
-              aria-label="License status"
+              onChange={(e) => setLicenseStatus(e.target.value)}
             >
               <option value="pending">pending</option>
               <option value="cleared">cleared</option>
               <option value="rejected">rejected</option>
               <option value="research_only">research_only</option>
-            </select>
-          </label>
-          <button type="submit" disabled={pending} aria-label="Create source">
+            </Select>
+          </div>
+          <Button type="submit" disabled={pending || !projectId}>
             {pending ? "Creating…" : "Create source"}
-          </button>
+          </Button>
         </form>
-      </section>
 
-      {error ? (
-        <p role="alert" style={{ color: "#b00020", margin: 0 }}>
-          {error}
-        </p>
-      ) : null}
-
-      <section aria-labelledby="sources-list-heading">
-        <h2 id="sources-list-heading" style={{ fontSize: "1.125rem" }}>
-          Sources
-        </h2>
         {sources.length === 0 ? (
-          <p style={{ color: "#555" }}>No sources yet.</p>
+          <EmptyState>No sources registered.</EmptyState>
         ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          <ul className="divide-y divide-gray-100 text-sm">
             {sources.map((source) => (
-              <li
-                key={source.id}
-                style={{
-                  padding: "0.75rem 0",
-                  borderBottom: "1px solid #ddd",
-                }}
-              >
-                <strong>{source.name}</strong>
-                <span style={{ color: "#555" }}>
+              <li key={source.id} className="py-2 first:pt-0">
+                <span className="font-medium">{source.name}</span>
+                <span className="text-gray-500">
                   {" "}
                   · {source.type} · {source.licenseStatus}
                 </span>
                 {source.baseUrl ? (
-                  <div style={{ fontSize: "0.875rem", color: "#666" }}>
-                    {source.baseUrl}
-                  </div>
+                  <p className="text-xs text-gray-500">{source.baseUrl}</p>
                 ) : null}
               </li>
             ))}
           </ul>
         )}
-      </section>
-    </main>
+      </Card>
+    </div>
   );
 };
 
