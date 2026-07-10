@@ -14,15 +14,17 @@
 | Product model | Single-tenant internal tool for one creative studio |
 | Output language | Vietnamese (primary) |
 | MVP content | Web Novel, text-first |
-| Content sources | Manual upload + licensed URL/RSS import |
-| Review policy | Soft review — outputs usable immediately; review optional |
+| Content sources | MVP: manual upload + single licensed URL import. RSS/feed sync: 3-month roadmap |
+| Review policy | Soft review — outputs usable at `status=ready`; optional status transitions only |
 | Target scale (12 months) | ~5–10 titles/month, ~50–100 chapters/week |
-| MVP outputs | Storytelling + packaging |
+| MVP outputs | Storytelling + packaging + light video assets (text-only, no render) |
 | Architecture | Modular monolith + async workers (Approach 2) |
 
 **MVP storytelling outputs:** chapter summary, arc summary, narration script, video outline  
 **MVP packaging outputs:** titles, thumbnail text, description, tags, 3-second hook  
-**Explicitly out of MVP:** OCR, ASR, TTS render, Neo4j, multi-tenant SaaS, Movie/Anime/Motion Comic pipelines, auto-publish to YouTube
+**MVP light assets (from script):** voice script (text), SRT cues, scene list, banner text, export zip  
+**MVP discovery scope:** register sources manually + store metadata/`license_status`; **no** automated RSS polling until month 3  
+**Explicitly out of MVP:** OCR, ASR, TTS audio render, Neo4j, multi-tenant SaaS, Movie/Anime/Motion Comic pipelines, auto-publish to YouTube, scheduled RSS sync
 
 **Target genres (full catalog vision):** Movie Recap, Anime Recap, Manhwa Recap, Manhua Recap, Motion Comic, Web Novel, Regression, Apocalypse, System, Cultivation, Fantasy, Zombie, Survival — only Web Novel is in MVP; genre packs land on the 6-month roadmap.
 
@@ -40,7 +42,7 @@
 |---|---|
 | Dashboard (Next.js) | Discovery, Library, Story Graph, Generation, Assets, Queue/Jobs, Review, Export, Analytics |
 | API (NestJS) | Auth, CRUD, enqueue jobs, read models, export |
-| Workers | Import, Understand, Generate, Asset, Discovery sync |
+| Workers | Import, Understand, Generate, Asset; Discovery sync from month 3 |
 | Postgres + pgvector | Relational SoT + embeddings |
 | Redis + BullMQ | Queues, retries, lightweight cache |
 | Object storage (R2/S3) | Raw uploads, export zips, future audio |
@@ -58,8 +60,8 @@
 
 | Module | MVP | Notes |
 |---|---|---|
-| Content Discovery | Yes (light) | Licensed RSS/URL sync, metadata, simple trend score |
-| Content Import | Yes | TXT, EPUB, DOCX, PDF, HTML, URL |
+| Content Discovery | Yes (light) | Manual source register + metadata + license gate; RSS sync deferred to month 3 |
+| Content Import | Yes | TXT, EPUB, DOCX, PDF, HTML, single URL fetch |
 | Story Understanding | Yes (core) | Entity extraction → Story Graph |
 | Story Graph | Yes | Relational + JSONB + pgvector |
 | AI Generation | Yes | Storytelling + packaging prompts |
@@ -105,10 +107,10 @@
 ## 3. Data flow
 
 ```
-Source register / Upload / RSS item
+Source register / Upload / single URL
         │
         ▼
-① DISCOVERY / SOURCE REGISTER
+① SOURCE REGISTER (MVP)  ·  RSS ITEM INGEST (month 3+)
    Persist sources + source_items (metadata, license_status, tags)
         │
         ▼
@@ -128,7 +130,7 @@ Source register / Upload / RSS item
    Voice script, SRT, scene list, banner text → optional export zip
 ```
 
-**Soft review:** `generation_outputs.status` starts as `ready`. Optional flags: `reviewed`, `approved`, `rejected`. Export does not require approval.
+**Soft review (single status model):** `generation_outputs.status` starts as `ready` and is immediately usable/exportable. Optional later transitions: `ready → reviewed → approved`, or `ready → rejected`, or `archived`. There are **no** separate boolean review flags — PATCH updates `status` and/or `content` only. Export does **not** require `approved`.
 
 **Idempotency:** job key = `storyId + jobType + chapterId? + promptVersion + contentHash`.
 
@@ -185,6 +187,7 @@ story_chunks (
 -- Jobs & outputs
 jobs (
   id, type, status, priority,
+  story_id null, -- denormalized for listing/filters; also present in payload
   payload jsonb, result jsonb,
   attempts, max_attempts, error,
   created_at, started_at, finished_at
@@ -370,8 +373,8 @@ Projects
 Sources / Discovery
   GET|POST /sources
   GET|PATCH /sources/:id
-  POST /sources/:id/sync
-  GET /discovery/items
+  POST /sources/:id/sync            # month 3+; MVP may stub 501
+  GET /discovery/items              # month 3+ RSS inbox; MVP lists manual sources only
 
 Library
   GET|POST /stories
@@ -381,8 +384,9 @@ Library
   GET /stories/:id/graph
 
 Import
-  POST /stories/:id/import          # multipart file and/or { url }
-  POST /stories/:id/import/batch
+  POST /stories                     # create story shell (title, project, source_id?)
+  POST /stories/:id/import          # requires existing story; multipart file and/or { url }
+  POST /stories/:id/import/batch    # multiple files into existing story
 
 Jobs
   GET /jobs
@@ -396,7 +400,7 @@ Understand / Generate
   POST /stories/:id/generate        # { type, chapter_id?, arc_id?, options? }
   GET /stories/:id/outputs
   GET /outputs/:id
-  PATCH /outputs/:id                # content edit + review flags
+  PATCH /outputs/:id                # edit content and/or status (ready|reviewed|approved|rejected|archived)
 
 Assets / Export
   POST /outputs/:id/assets          # { types: [] }
@@ -419,7 +423,7 @@ Admin
 
 | Queue | Concurrency (MVP) | Job names |
 |---|---|---|
-| `discovery` | 1 | `rss_sync`, `trend_score` |
+| `discovery` | 1 | MVP: unused/manual only. Month 3+: `rss_sync`, `trend_score` |
 | `import` | 2 | `parse_file`, `fetch_url`, `chunk_embed` |
 | `understand` | 2 | `extract_chapter`, `resolve_entities`, `rollup_arcs` |
 | `generate` | 3 | `gen_<type>` |
@@ -444,26 +448,28 @@ MVP: one Node worker process consuming all queues (named processors). Scale by a
 
 | Week | Deliverable |
 |---|---|
-| 1–2 | Auth, projects/stories/chapters CRUD, TXT/EPUB upload, parse, chunk, embed |
-| 3–4 | Understand worker, Story Graph tables, chapter summary |
+| 1–2 | Auth, projects/stories/chapters CRUD, manual source register + license gate, TXT/EPUB upload + single URL import, parse, chunk, embed |
+| 3–4 | Understand worker, Story Graph tables, chapter summary; **minimal** arc rollup (heuristic chapter ranges → `arcs` rows) so arc-scoped generate works |
 | 5 | Generate: chapter/arc summary, narration script, video outline |
-| 6 | Packaging outputs, Jobs UI, export zip, usage/cost logging |
+| 6 | Packaging outputs, light assets (voice script text, SRT, scene list, banner text), Jobs UI, thin Review (edit content + change `status`), export zip, usage/cost logging |
+
+**Not in 6-week MVP:** automated RSS/feed polling, trend scoring jobs, TTS audio files, polished Review workflow UI (that lands month 3).
 
 **MVP success criteria**
 
-- Import a licensed web novel (file or cleared URL) end-to-end
+- Register a cleared source and import a web novel (file or single cleared URL) end-to-end
 - Story Graph populated for ≥1 arc worth of chapters
-- Produce VI script + packaging pack and download zip
+- Produce VI script + packaging + light text assets and download zip
 - Cost per chapter visible in analytics
 
 ---
 
 ## 10. Roadmap — 3 months
 
-- Licensed URL/RSS discovery with hard `license_status` gate
-- Arc rollup + character profiles + basic timeline UI
+- Automated licensed RSS/URL discovery sync with hard `license_status` gate + simple trend score
+- Improved arc rollup + character profiles + basic timeline UI
 - Prompt versioning + light A/B
-- Soft review UI (edit/flag outputs)
+- Polished soft review UI (queues, filters; status model already in MVP)
 - Better entity resolution (aliases)
 - Stable DOCX/PDF/HTML import
 - Per-story and per-day usage dashboard
@@ -596,13 +602,13 @@ At locked scale A, a single VPS/Docker Compose stack is acceptable for MVP–3 m
 
 ## Appendix B — Dashboard information architecture
 
-1. **Discovery** — sources, sync status, incoming items, license badges  
+1. **Discovery** — manual sources, license badges; sync/incoming RSS UI from month 3  
 2. **Library** — stories, chapters, import actions  
 3. **Story Graph** — characters, arcs, timeline, relationships (read-mostly MVP)  
 4. **AI Generation** — pick type, enqueue, browse outputs  
 5. **Asset Export** — build pack, download zip  
 6. **Queue / Jobs** — live status, retry, errors  
-7. **Review** — optional flags/edits (soft)  
+7. **Review** — MVP: thin edit + `status` change on outputs; month 3: fuller review queue UI  
 8. **Publish** — export-centric in MVP  
 9. **Analytics** — tokens, cost, job success  
 
