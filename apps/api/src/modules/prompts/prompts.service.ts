@@ -1,7 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { PROMPT_TEMPLATE_SEEDS } from "../../ai/prompts/generation.v1";
 import type { GenerationType } from "../../ai/prompts/generation.types";
+import { REMIX_PACKAGE_V1_SEED } from "../../ai/prompts/remix.package.v1";
 import { PrismaService } from "../../prisma/prisma.service";
+
+const PROMPT_TEMPLATE_SEED_ROWS = [
+  ...PROMPT_TEMPLATE_SEEDS,
+  REMIX_PACKAGE_V1_SEED,
+];
 
 @Injectable()
 export class PromptsService implements OnModuleInit {
@@ -10,7 +16,7 @@ export class PromptsService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   async onModuleInit(): Promise<void> {
-    for (const seed of PROMPT_TEMPLATE_SEEDS) {
+    for (const seed of PROMPT_TEMPLATE_SEED_ROWS) {
       await this.prisma.promptTemplate.upsert({
         where: {
           key_version: {
@@ -24,18 +30,26 @@ export class PromptsService implements OnModuleInit {
           locale: seed.locale,
           body: seed.body,
           modelHint: seed.modelHint ?? null,
+          outputSchema:
+            "outputSchema" in seed && seed.outputSchema
+              ? seed.outputSchema
+              : undefined,
           active: true,
         },
         update: {
           locale: seed.locale,
           body: seed.body,
           modelHint: seed.modelHint ?? null,
+          outputSchema:
+            "outputSchema" in seed && seed.outputSchema
+              ? seed.outputSchema
+              : undefined,
           active: true,
         },
       });
     }
     this.logger.log(
-      `Seeded ${PROMPT_TEMPLATE_SEEDS.length} prompt templates (locale vi)`,
+      `Seeded ${PROMPT_TEMPLATE_SEED_ROWS.length} prompt templates (locale vi)`,
     );
   }
 
