@@ -3,12 +3,12 @@ import {
   Controller,
   ForbiddenException,
   Get,
-  NotImplementedException,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  StreamableFile,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -17,12 +17,16 @@ import {
 } from "../auth/session-auth.guard";
 import { TriggerRemixDto } from "./dto/trigger-remix.dto";
 import { UpdateRemixDto } from "./dto/update-remix.dto";
+import { RemixExportService } from "./remix-export.service";
 import { RemixService } from "./remix.service";
 
 @Controller("viral/remix")
 @UseGuards(SessionAuthGuard)
 export class RemixController {
-  constructor(private readonly remixService: RemixService) {}
+  constructor(
+    private readonly remixService: RemixService,
+    private readonly remixExportService: RemixExportService,
+  ) {}
 
   @Post()
   triggerRemix(@Body() body: TriggerRemixDto) {
@@ -68,7 +72,12 @@ export class RemixController {
   }
 
   @Get(":id/export")
-  exportRemake() {
-    throw new NotImplementedException("Remix export is not implemented yet");
+  async exportRemake(@Param("id") id: string): Promise<StreamableFile> {
+    const { stream, filename } = await this.remixExportService.exportRemake(id);
+
+    return new StreamableFile(stream, {
+      type: "application/zip",
+      disposition: `attachment; filename="${filename}"`,
+    });
   }
 }

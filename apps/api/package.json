@@ -3,8 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "start:api": "tsx src/main.ts",
-    "start:worker": "tsx src/workers/worker.main.ts",
+    "start:api": "node -r @swc-node/register src/main.ts",
+    "start:worker": "node -r @swc-node/register src/workers/worker.main.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -17,12 +17,14 @@
     "@nestjs/core": "^11.1.28",
     "@nestjs/platform-express": "^11.1.28",
     "@prisma/client": "^6.19.3",
+    "archiver": "^8.0.0",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.80.0",
     "cheerio": "^1.2.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
+    "dotenv": "^16.6.1",
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",
     "jszip": "^3.10.1",
@@ -32,6 +34,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@swc-node/register": "^1.11.1",
+    "@swc/core": "^1.15.43",
+    "@types/archiver": "^8.0.0",
     "@types/bcrypt": "^6.0.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
@@ -40,8 +45,9 @@
     "@types/multer": "^2.2.0",
     "@types/node": "^26.1.1",
     "prisma": "^6.19.3",
+    "ts-node": "^10.9.2",
     "tsx": "^4.23.0",
-    "typescript": "^7.0.2",
+    "typescript": "^5.9.2",
     "vitest": "^4.1.10"
   }
 }
