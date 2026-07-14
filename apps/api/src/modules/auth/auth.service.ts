@@ -1,10 +1,11 @@
 import {
+  Inject,
   Injectable,
   OnModuleInit,
   UnauthorizedException,
 } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
-import type { PrismaService } from "../../prisma/prisma.service";
+import { PrismaService } from "../../prisma/prisma.service";
 
 export type AuthUser = {
   id: string;
@@ -15,7 +16,9 @@ export type AuthUser = {
 
 @Injectable()
 export class AuthService implements OnModuleInit {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     await this.seedStudioUser();

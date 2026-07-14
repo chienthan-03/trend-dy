@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { FakeDouyinAdapter } from "./adapters/fake-douyin.adapter";
 
 export type DouyinRankItem = {
@@ -23,13 +24,11 @@ export interface DouyinRankingAdapter {
  *
  * Environment:
  * - `DOUYIN_ADAPTER` — `fake` (default) or `live`
- * - `DOUYIN_LIVE_ADAPTER_MODULE` — required when `DOUYIN_ADAPTER=live`; absolute or
- *   package-resolvable path to a studio-provided plugin that exports
- *   `createLiveDouyinAdapter(): DouyinRankingAdapter | Promise<DouyinRankingAdapter>`
- *
- * The in-repo fake adapter returns deterministic metadata fixtures for dev and tests.
- * Production crawl logic lives in the studio-owned live plugin and is loaded dynamically.
- * Do not commit ToS-bypass or anti-bot scraping code to this repository.
+ * - `DOUYIN_API_PROVIDER` — `justoneapi` (default) or `http`
+ * - `DOUYIN_API_TOKEN` — Just One API token (required for justoneapi)
+ * - `DOUYIN_API_BASE_URL` — optional; default https://api.justoneapi.com
+ * - `DOUYIN_HTTP_FETCH_URL` — studio proxy JSON endpoint (provider=http)
+ * - `DOUYIN_LIVE_ADAPTER_MODULE` — optional custom plugin path
  */
 export const createDouyinAdapter = async (): Promise<DouyinRankingAdapter> => {
   const mode = process.env.DOUYIN_ADAPTER ?? "fake";
@@ -39,26 +38,27 @@ export const createDouyinAdapter = async (): Promise<DouyinRankingAdapter> => {
   }
 
   if (mode === "live") {
-    const modulePath = process.env.DOUYIN_LIVE_ADAPTER_MODULE;
-    if (!modulePath) {
-      throw new Error(
-        "DOUYIN_LIVE_ADAPTER_MODULE must be set when DOUYIN_ADAPTER=live. " +
-          "Install the studio-provided live adapter plugin separately; " +
-          "this repository does not ship ToS-bypass crawl code.",
-      );
+    const modulePath = process.env.DOUYIN_LIVE_ADAPTER_MODULE?.trim();
+
+    if (modulePath) {
+      const resolvedModule = modulePath.startsWith(".")
+        ? resolve(__dirname, "adapters", modulePath)
+        : modulePath;
+      const liveModule = (await import(resolvedModule)) as {
+        createLiveDouyinAdapter?: () => DouyinRankingAdapter | Promise<DouyinRankingAdapter>;
+      };
+
+      if (typeof liveModule.createLiveDouyinAdapter !== "function") {
+        throw new Error(
+          `Live adapter module "${modulePath}" must export createLiveDouyinAdapter()`,
+        );
+      }
+
+      return liveModule.createLiveDouyinAdapter();
     }
 
-    const liveModule = (await import(modulePath)) as {
-      createLiveDouyinAdapter?: () => DouyinRankingAdapter | Promise<DouyinRankingAdapter>;
-    };
-
-    if (typeof liveModule.createLiveDouyinAdapter !== "function") {
-      throw new Error(
-        `Live adapter module "${modulePath}" must export createLiveDouyinAdapter()`,
-      );
-    }
-
-    return liveModule.createLiveDouyinAdapter();
+    const { LiveDouyinAdapter } = await import("./adapters/live/live-douyin.adapter");
+    return new LiveDouyinAdapter();
   }
 
   throw new Error(`Unknown DOUYIN_ADAPTER value "${mode}". Use "fake" or "live".`);

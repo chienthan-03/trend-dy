@@ -8,6 +8,7 @@
     "dev:api": "pnpm --filter api start:api",
     "dev:web": "pnpm --filter web dev",
     "dev:worker": "pnpm --filter api start:worker",
+    "dev:redis": "powershell -ExecutionPolicy Bypass -File scripts/start-redis.ps1",
     "build": "echo \"TODO: build workspace\"",
     "test": "echo \"TODO: run tests\"",
     "lint": "echo \"TODO: lint workspace\""

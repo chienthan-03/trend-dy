@@ -1,7 +1,9 @@
 import { InjectQueue } from "@nestjs/bullmq";
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import type { Prisma, ViralBoard, ViralCrawlRun, ViralItem } from "@prisma/client";
@@ -16,6 +18,8 @@ const REPEATABLE_JOB_PREFIX = "repeat-crawl";
 
 @Injectable()
 export class ViralService {
+  private readonly logger = new Logger(ViralService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobsService: JobsService,
@@ -43,6 +47,20 @@ export class ViralService {
     });
     if (!project) {
       throw new NotFoundException(`Project ${dto.projectId} not found`);
+    }
+
+    const existing = await this.prisma.viralBoard.findUnique({
+      where: {
+        projectId_boardKey: {
+          projectId: dto.projectId,
+          boardKey: dto.boardKey,
+        },
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `Board "${dto.boardKey}" already exists for this project`,
+      );
     }
 
     const board = await this.prisma.viralBoard.create({
@@ -185,26 +203,32 @@ export class ViralService {
   }
 
   async syncBoardSchedule(board: ViralBoard): Promise<void> {
-    const repeatableJobs = await this.discoveryQueue.getRepeatableJobs();
-    const repeatKey = `${REPEATABLE_JOB_PREFIX}:${board.id}`;
+    try {
+      const repeatableJobs = await this.discoveryQueue.getRepeatableJobs();
+      const repeatKey = `${REPEATABLE_JOB_PREFIX}:${board.id}`;
 
-    for (const job of repeatableJobs) {
-      if (job.id === repeatKey || job.name === repeatKey) {
-        await this.discoveryQueue.removeRepeatableByKey(job.key);
+      for (const job of repeatableJobs) {
+        if (job.id === repeatKey || job.name === repeatKey) {
+          await this.discoveryQueue.removeRepeatableByKey(job.key);
+        }
       }
-    }
 
-    if (!board.enabled) {
-      return;
-    }
+      if (!board.enabled) {
+        return;
+      }
 
-    await this.discoveryQueue.add(
-      "douyin_rank_crawl",
-      { boardId: board.id, scheduled: true },
-      {
-        jobId: repeatKey,
-        repeat: { every: board.crawlIntervalSec * 1000 },
-      },
-    );
+      await this.discoveryQueue.add(
+        "douyin_rank_crawl",
+        { boardId: board.id, scheduled: true },
+        {
+          jobId: repeatKey,
+          repeat: { every: board.crawlIntervalSec * 1000 },
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Board schedule sync skipped for ${board.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 }

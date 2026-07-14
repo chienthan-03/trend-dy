@@ -11,4 +11,6 @@ coverage/
 .DS_Store
 .vscode/
 prisma/*.db
-prisma/*.db-journal
+generated/
+.data/
+vendor/redis-7/

@@ -85,14 +85,42 @@ describe("createDouyinAdapter", () => {
     }
   });
 
-  it("requires a studio plugin path when DOUYIN_ADAPTER=live", async () => {
+  it("returns built-in live adapter when DOUYIN_ADAPTER=live and token is set", async () => {
     const previousAdapter = process.env.DOUYIN_ADAPTER;
-    const previousModule = process.env.DOUYIN_LIVE_ADAPTER_MODULE;
+    const previousToken = process.env.DOUYIN_API_TOKEN;
     process.env.DOUYIN_ADAPTER = "live";
-    delete process.env.DOUYIN_LIVE_ADAPTER_MODULE;
+    process.env.DOUYIN_API_TOKEN = "test-token";
 
     try {
-      await expect(createDouyinAdapter()).rejects.toThrow(/DOUYIN_LIVE_ADAPTER_MODULE/);
+      const { LiveDouyinAdapter } = await import("./live/live-douyin.adapter");
+      const adapter = await createDouyinAdapter();
+      expect(adapter).toBeInstanceOf(LiveDouyinAdapter);
+    } finally {
+      if (previousAdapter === undefined) {
+        delete process.env.DOUYIN_ADAPTER;
+      } else {
+        process.env.DOUYIN_ADAPTER = previousAdapter;
+      }
+      if (previousToken === undefined) {
+        delete process.env.DOUYIN_API_TOKEN;
+      } else {
+        process.env.DOUYIN_API_TOKEN = previousToken;
+      }
+    }
+  });
+
+  it("loads a custom plugin when DOUYIN_LIVE_ADAPTER_MODULE is set", async () => {
+    const previousAdapter = process.env.DOUYIN_ADAPTER;
+    const previousModule = process.env.DOUYIN_LIVE_ADAPTER_MODULE;
+    const previousToken = process.env.DOUYIN_API_TOKEN;
+    process.env.DOUYIN_ADAPTER = "live";
+    process.env.DOUYIN_LIVE_ADAPTER_MODULE = "./live/live-douyin.adapter";
+    delete process.env.DOUYIN_API_TOKEN;
+
+    try {
+      const adapter = await createDouyinAdapter();
+      const { LiveDouyinAdapter } = await import("./live/live-douyin.adapter");
+      expect(adapter).toBeInstanceOf(LiveDouyinAdapter);
     } finally {
       if (previousAdapter === undefined) {
         delete process.env.DOUYIN_ADAPTER;
@@ -103,6 +131,11 @@ describe("createDouyinAdapter", () => {
         delete process.env.DOUYIN_LIVE_ADAPTER_MODULE;
       } else {
         process.env.DOUYIN_LIVE_ADAPTER_MODULE = previousModule;
+      }
+      if (previousToken === undefined) {
+        delete process.env.DOUYIN_API_TOKEN;
+      } else {
+        process.env.DOUYIN_API_TOKEN = previousToken;
       }
     }
   });

@@ -27,8 +27,8 @@ export type UploadedImportFile = {
 @Injectable()
 export class ImportService {
   constructor(
-    private readonly sourcesService: SourcesService,
-    private readonly jobsService: JobsService,
+    @Inject(SourcesService) private readonly sourcesService: SourcesService,
+    @Inject(JobsService) private readonly jobsService: JobsService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {}
 

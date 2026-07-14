@@ -121,10 +121,12 @@ export class DiscoveryProcessor extends WorkerHost {
 
     try {
       const adapter = await createDouyinAdapter();
-      const config =
-        board.adapterConfig && typeof board.adapterConfig === "object"
+      const config = {
+        ...(board.adapterConfig && typeof board.adapterConfig === "object"
           ? (board.adapterConfig as Record<string, unknown>)
-          : {};
+          : {}),
+        genre: board.genre,
+      };
       const fetched = await adapter.fetchBoard(board.boardKey, config);
 
       const upsertedIds: string[] = [];
