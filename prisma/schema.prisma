@@ -1,6 +1,7 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
+  output          = "../generated/prisma-client"
 }
 
 datasource db {
@@ -29,9 +30,10 @@ model Project {
   styleGuide Json?    @map("style_guide")
   createdAt  DateTime @default(now()) @map("created_at")
 
-  sources     Source[]
-  stories     Story[]
-  viralBoards ViralBoard[]
+  sources      Source[]
+  stories      Story[]
+  viralBoards  ViralBoard[]
+  viralRemakes ViralRemake[]
 
   @@map("projects")
 }
@@ -124,7 +126,8 @@ model ViralItem {
   rawPayload      Json?     @map("raw_payload")
   createdAt       DateTime  @default(now()) @map("created_at")
 
-  board ViralBoard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  board   ViralBoard    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  remakes ViralRemake[]
 
   @@unique([boardId, externalId])
   @@index([boardId, tier])
@@ -146,6 +149,37 @@ model ViralCrawlRun {
 
   @@index([boardId, startedAt])
   @@map("viral_crawl_runs")
+}
+
+model ViralRemake {
+  id               String    @id @default(cuid())
+  projectId        String    @map("project_id")
+  viralItemId      String?   @map("viral_item_id")
+  externalVideoId  String    @map("external_video_id")
+  sourceUrl        String?   @map("source_url")
+  sourceSnapshot   Json?     @map("source_snapshot")
+  genre            String?
+  status           String    @default("pending")
+  usagePolicy      String    @default("remix_draft") @map("usage_policy")
+  packageJson      Json?     @map("package_json")
+  policyChecklist  Json?     @map("policy_checklist")
+  policyWarnings   String[]  @default([]) @map("policy_warnings")
+  editorNotes      String?   @map("editor_notes")
+  approvedByUserId String?   @map("approved_by_user_id")
+  approvedAt       DateTime? @map("approved_at")
+  tokensIn         Int?      @map("tokens_in")
+  tokensOut        Int?      @map("tokens_out")
+  costUsd          Float?    @map("cost_usd")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  viralItem ViralItem? @relation(fields: [viralItemId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, status, createdAt(sort: Desc)])
+  @@index([viralItemId])
+  @@index([externalVideoId])
+  @@map("viral_remakes")
 }
 
 // ─── Library ────────────────────────────────────────────────────────────────
