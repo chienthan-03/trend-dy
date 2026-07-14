@@ -116,6 +116,7 @@ describe("JobsService budget guard on enqueue", () => {
       generateQueue as unknown as Queue,
       createMockQueue() as unknown as Queue,
       createMockQueue() as unknown as Queue,
+      createMockQueue() as unknown as Queue,
     );
   });
 

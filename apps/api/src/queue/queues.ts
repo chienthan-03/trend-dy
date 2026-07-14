@@ -4,6 +4,7 @@ export const QUEUE_NAMES = [
   "generate",
   "asset",
   "discovery",
+  "remix",
 ] as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[number];

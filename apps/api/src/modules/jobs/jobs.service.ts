@@ -1,6 +1,7 @@
 import { InjectQueue } from "@nestjs/bullmq";
 import {
   BadRequestException,
+  Inject,
   Injectable,
   MessageEvent,
   NotFoundException,
@@ -48,13 +49,14 @@ export class JobsService {
   private readonly queues: Record<QueueName, Queue>;
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly budgetGuard: BudgetGuard,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(BudgetGuard) private readonly budgetGuard: BudgetGuard,
     @InjectQueue("import") importQueue: Queue,
     @InjectQueue("understand") understandQueue: Queue,
     @InjectQueue("generate") generateQueue: Queue,
     @InjectQueue("asset") assetQueue: Queue,
     @InjectQueue("discovery") discoveryQueue: Queue,
+    @InjectQueue("remix") remixQueue: Queue,
   ) {
     this.queues = {
       import: importQueue,
@@ -62,6 +64,7 @@ export class JobsService {
       generate: generateQueue,
       asset: assetQueue,
       discovery: discoveryQueue,
+      remix: remixQueue,
     };
   }
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { QUEUE_NAMES } from "./queues";
 
 describe("QUEUE_NAMES", () => {
-  it("includes import, understand, generate, asset, discovery", () => {
+  it("includes import, understand, generate, asset, discovery, remix", () => {
     expect(QUEUE_NAMES).toEqual(
       expect.arrayContaining([
         "import",
@@ -10,8 +10,9 @@ describe("QUEUE_NAMES", () => {
         "generate",
         "asset",
         "discovery",
+        "remix",
       ]),
     );
-    expect(QUEUE_NAMES).toHaveLength(5);
+    expect(QUEUE_NAMES).toHaveLength(6);
   });
 });

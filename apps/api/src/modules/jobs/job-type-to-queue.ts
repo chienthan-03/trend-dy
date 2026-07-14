@@ -60,5 +60,9 @@ export const resolveQueueName = (type: string): QueueName => {
     return "discovery";
   }
 
+  if (type.startsWith("remix_")) {
+    return "remix";
+  }
+
   throw new Error(`Unknown job type — no queue mapping for "${type}"`);
 };

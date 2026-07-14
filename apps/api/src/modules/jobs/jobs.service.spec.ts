@@ -36,6 +36,7 @@ const createService = (
     generateQueue?: MockQueue;
     assetQueue?: MockQueue;
     discoveryQueue?: MockQueue;
+    remixQueue?: MockQueue;
   },
   budgetGuard?: ReturnType<typeof createBudgetGuard>,
 ) => {
@@ -44,6 +45,7 @@ const createService = (
   const generateQueue = queues?.generateQueue ?? createMockQueue();
   const assetQueue = queues?.assetQueue ?? createMockQueue();
   const discoveryQueue = queues?.discoveryQueue ?? createMockQueue();
+  const remixQueue = queues?.remixQueue ?? createMockQueue();
   const guard = budgetGuard ?? createBudgetGuard();
 
   const service = new JobsService(
@@ -54,6 +56,7 @@ const createService = (
     generateQueue as unknown as Queue,
     assetQueue as unknown as Queue,
     discoveryQueue as unknown as Queue,
+    remixQueue as unknown as Queue,
   );
 
   return {
@@ -63,6 +66,7 @@ const createService = (
     generateQueue,
     assetQueue,
     discoveryQueue,
+    remixQueue,
     budgetGuard: guard,
   };
 };

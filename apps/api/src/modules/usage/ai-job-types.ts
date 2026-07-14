@@ -3,7 +3,11 @@ import { resolveQueueName } from "../jobs/job-type-to-queue";
 export const isAiBudgetedJobType = (type: string): boolean => {
   try {
     const queue = resolveQueueName(type);
-    return queue === "understand" || queue === "generate";
+    return (
+      queue === "understand" ||
+      queue === "generate" ||
+      type === "remix_generate"
+    );
   } catch {
     return false;
   }
