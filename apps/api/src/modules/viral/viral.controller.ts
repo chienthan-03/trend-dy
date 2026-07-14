@@ -9,6 +9,8 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { SessionAuthGuard } from "../auth/session-auth.guard";
+import { TriggerItemRemixDto } from "../remix/dto/trigger-item-remix.dto";
+import { RemixService } from "../remix/remix.service";
 import { CreateViralBoardDto } from "./dto/create-viral-board.dto";
 import { UpdateViralBoardDto } from "./dto/update-viral-board.dto";
 import { UpdateViralItemDto } from "./dto/update-viral-item.dto";
@@ -17,7 +19,10 @@ import { ViralService } from "./viral.service";
 @Controller("viral")
 @UseGuards(SessionAuthGuard)
 export class ViralController {
-  constructor(private readonly viralService: ViralService) {}
+  constructor(
+    private readonly viralService: ViralService,
+    private readonly remixService: RemixService,
+  ) {}
 
   @Get("boards")
   listBoards(@Query("projectId") projectId?: string) {
@@ -69,6 +74,17 @@ export class ViralController {
   @Patch("items/:id")
   updateItem(@Param("id") id: string, @Body() body: UpdateViralItemDto) {
     return this.viralService.updateItem(id, body);
+  }
+
+  @Post("items/:id/remix")
+  triggerItemRemix(
+    @Param("id") id: string,
+    @Body() body: TriggerItemRemixDto,
+  ) {
+    return this.remixService.triggerRemix({
+      projectId: body.projectId,
+      viralItemId: id,
+    });
   }
 
   @Get("genres/top")

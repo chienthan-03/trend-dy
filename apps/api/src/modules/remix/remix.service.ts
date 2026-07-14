@@ -8,6 +8,7 @@ import {
 import type { Prisma, ViralRemake } from "@prisma/client";
 import {
   defaultRemixPolicyChecklist,
+  isPolicyChecklistComplete,
   literalOverlapRatio,
   type RemixPackageV1,
   type RemixPolicyChecklist,
@@ -167,6 +168,28 @@ export class RemixService {
     return this.prisma.viralRemake.update({
       where: { id },
       data: { status: "archived" },
+    });
+  }
+
+  async approve(id: string, approvedByUserId: string): Promise<ViralRemake> {
+    const remake = await this.getRemake(id);
+    const checklist = remake.policyChecklist as RemixPolicyChecklist | null;
+
+    if (!checklist) {
+      throw new BadRequestException("Policy checklist is required before approval");
+    }
+
+    if (!isPolicyChecklistComplete(checklist)) {
+      throw new BadRequestException("Policy checklist is incomplete");
+    }
+
+    return this.prisma.viralRemake.update({
+      where: { id },
+      data: {
+        usagePolicy: "approved_for_export",
+        approvedAt: new Date(),
+        approvedByUserId,
+      },
     });
   }
 
