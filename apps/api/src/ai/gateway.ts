@@ -214,6 +214,48 @@ const FAKE_VI_BY_TYPE: Record<string, string> = {
   "pack.description": "Recap đầy đủ cung truyện — theo dõi để không bỏ lỡ tập sau!",
   "pack.tags": '["recap","truyện","vi","douyin","tiktok","manhua","fantasy","hấp_dẫn"]',
   "pack.hook_3s": "Bạn có tin chuyện này lại bắt đầu từ một viên đá vô danh?",
+  remix_generate: JSON.stringify({
+    locale: "vi",
+    script: {
+      narration:
+        "Một thiếu niên bất ngờ nhận được sức mạnh ẩn giấu và bước vào hành trình đổi đời.",
+      duration_estimate_sec: 120,
+      sections: [
+        { label: "hook", text: "Bạn có tin chuyện này bắt đầu từ một viên đá?" },
+        { label: "body", text: "Câu chuyện mở ra với một nhân vật bình thường..." },
+      ],
+    },
+    hook_3s: {
+      spoken: "Bạn có tin chuyện này bắt đầu từ một viên đá?",
+      on_screen: "BÍ MẬT BẤT NGỜ",
+      visual_hint: "close-up shocked face",
+    },
+    banners: {
+      top: "RECAP HOT",
+      bottom: "Theo dõi để xem tiếp",
+      watermark: "STUDIO ALPHA",
+    },
+    packaging: {
+      titles: ["Tiêu đề A", "Tiêu đề B", "Tiêu đề C"],
+      description: "Recap đầy đủ — theo dõi để không bỏ lỡ!",
+      hashtags: ["recap", "douyin", "vi"],
+    },
+    subtitles: {
+      format: "srt",
+      cues: [
+        {
+          start: "00:00:00,000",
+          end: "00:00:03,000",
+          text: "Bạn có tin chuyện này bắt đầu từ một viên đá?",
+        },
+      ],
+    },
+    transform_notes: {
+      source_language: "zh",
+      rewrite_strategy: "recap_vn_inspired",
+      risks: [],
+    },
+  }),
 };
 
 const completeTextWithOpenAi = async (
