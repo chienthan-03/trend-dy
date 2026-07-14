@@ -6,7 +6,7 @@ import { useProject } from "@/lib/project-context";
 import { Select } from "@/components/ui";
 
 const NAV_ITEMS = [
-  { href: "/discovery", label: "Discovery" },
+  { href: "/discovery", label: "Viral Feed" },
   { href: "/library", label: "Library" },
   { href: "/jobs", label: "Jobs" },
   { href: "/analytics", label: "Analytics" },

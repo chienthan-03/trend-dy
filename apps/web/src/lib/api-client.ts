@@ -91,9 +91,12 @@ export type ViralItem = {
   hashtags: string[];
   tier: string | null;
   trendScore: number | null;
+  rankPosition: number | null;
   genres: string[];
   usagePolicy: string;
   crawledAt: string;
+  coverUrl: string | null;
+  stats: Record<string, number> | null;
 };
 
 export type ViralCrawlRun = {
