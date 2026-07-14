@@ -275,6 +275,19 @@ describe("JobsService.list", () => {
     });
     expect(result).toEqual(jobs);
   });
+
+  it("filters jobs by typePrefix", async () => {
+    const jobs = [{ id: "job_1", type: "remix_generate", status: "queued" }];
+    prisma.job.findMany.mockResolvedValue(jobs);
+
+    const result = await service.list({ typePrefix: "remix_" });
+
+    expect(prisma.job.findMany).toHaveBeenCalledWith({
+      where: { type: { startsWith: "remix_" } },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(result).toEqual(jobs);
+  });
 });
 
 describe("JobsService.findById", () => {

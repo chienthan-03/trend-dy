@@ -22,6 +22,7 @@ const TERMINAL_JOB_STATUSES = ["completed", "failed", "cancelled"] as const;
 export type ListJobsFilters = {
   storyId?: string;
   status?: string;
+  typePrefix?: string;
 };
 
 /** Statuses that count as "in flight" for idempotency checks. */
@@ -128,6 +129,10 @@ export class JobsService {
 
     if (filters.status) {
       where.status = filters.status;
+    }
+
+    if (filters.typePrefix) {
+      where.type = { startsWith: filters.typePrefix };
     }
 
     return this.prisma.job.findMany({

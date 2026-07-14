@@ -21,8 +21,9 @@ export class JobsController {
   list(
     @Query("storyId") storyId?: string,
     @Query("status") status?: string,
+    @Query("typePrefix") typePrefix?: string,
   ) {
-    return this.jobsService.list({ storyId, status });
+    return this.jobsService.list({ storyId, status, typePrefix });
   }
 
   @Get(":id/events")

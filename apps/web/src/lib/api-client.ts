@@ -191,6 +191,7 @@ export type Job = {
   type: string;
   status: string;
   storyId: string | null;
+  payload?: Record<string, unknown> | null;
   error: string | null;
   attempts: number;
   createdAt: string;
@@ -403,10 +404,15 @@ export const api = {
       }),
   },
   jobs: {
-    list: (params?: { storyId?: string; status?: string }) => {
+    list: (params?: {
+      storyId?: string;
+      status?: string;
+      typePrefix?: string;
+    }) => {
       const query = new URLSearchParams();
       if (params?.storyId) query.set("storyId", params.storyId);
       if (params?.status) query.set("status", params.status);
+      if (params?.typePrefix) query.set("typePrefix", params.typePrefix);
       const qs = query.toString();
       return apiFetch<Job[]>(`/jobs${qs ? `?${qs}` : ""}`);
     },
