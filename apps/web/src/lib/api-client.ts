@@ -50,7 +50,16 @@ export const apiFetch = async <T>(
 };
 
 export const getErrorMessage = (error: unknown): string => {
-  if (error instanceof ApiError) return parseErrorMessage(error.body);
+  if (error instanceof ApiError) {
+    const message = parseErrorMessage(error.body);
+    if (error.status === 503) {
+      if (/remix/i.test(message)) {
+        return "Remix is disabled on the server. Set REMIX_ENABLED=true to enable Chế biến.";
+      }
+      return message || "Service temporarily unavailable. Try again later.";
+    }
+    return message;
+  }
   if (error instanceof Error) return error.message;
   return "Something went wrong";
 };

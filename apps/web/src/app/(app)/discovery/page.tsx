@@ -318,7 +318,22 @@ const DiscoveryPage = () => {
       <Card title={`Viral feed · ${formatGenre(genre)}`}>
         {sortedItems.length === 0 ? (
           <EmptyState>
-            No items for this genre and tier filter. Try crawling a board below.
+            <p>No items for this genre and tier filter yet.</p>
+            {genreBoards.length > 0 ? (
+              <Button
+                className="mt-3"
+                onClick={() => void handleCrawl(genreBoards[0].id)}
+                disabled={crawlPending === genreBoards[0].id}
+                aria-label={`Crawl ${genreBoards[0].label}`}
+              >
+                {crawlPending === genreBoards[0].id ? "Crawling…" : "Crawl now"}
+              </Button>
+            ) : (
+              <p className="mt-2 text-xs">
+                Open Boards &amp; crawl controls below to create a board and
+                fetch items.
+              </p>
+            )}
           </EmptyState>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">

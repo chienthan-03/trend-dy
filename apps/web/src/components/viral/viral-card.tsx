@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Badge, Button, formatGenre, TierBadge } from "@/components/ui";
+import { Badge, Button, formatGenre, Spinner, TierBadge } from "@/components/ui";
 import type { ViralItem } from "@/lib/api-client";
 
 type ViralCardProps = {
@@ -69,6 +69,7 @@ export const ViralCard = ({
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <TierBadge tier={item.tier} />
+          {isBlocked ? <Badge tone="danger">Blocked</Badge> : null}
           <span className="text-xs font-medium text-gray-600">
             {item.trendScore != null ? item.trendScore.toFixed(2) : "—"}
           </span>
@@ -104,14 +105,23 @@ export const ViralCard = ({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button
-            onClick={onRemix}
-            disabled={isBlocked || remixPending}
-            aria-label={`Chế biến ${item.title}`}
-            aria-disabled={isBlocked || remixPending}
-          >
-            {remixPending ? "Đang chế biến…" : "Chế biến"}
-          </Button>
+          {!isBlocked ? (
+            <Button
+              onClick={onRemix}
+              disabled={remixPending}
+              aria-label={`Chế biến ${item.title}`}
+              aria-busy={remixPending}
+            >
+              {remixPending ? (
+                <>
+                  <Spinner className="mr-2" />
+                  Đang chế biến…
+                </>
+              ) : (
+                "Chế biến"
+              )}
+            </Button>
+          ) : null}
           <Button
             variant="secondary"
             onClick={onSkip}
