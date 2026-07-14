@@ -1,3 +1,5 @@
+import type { RemixPackageV1, RemixPolicyChecklist } from "@factory/shared";
+
 const API_BASE = "/api/v1";
 
 export class ApiError extends Error {
@@ -102,6 +104,34 @@ export type ViralCrawlRun = {
   finishedAt: string | null;
   itemCount: number | null;
   error: string | null;
+};
+
+export type ViralRemake = {
+  id: string;
+  projectId: string;
+  viralItemId: string | null;
+  externalVideoId: string;
+  sourceUrl: string | null;
+  sourceSnapshot: unknown;
+  genre: string | null;
+  status: string;
+  usagePolicy: string;
+  packageJson: RemixPackageV1 | null;
+  policyChecklist: RemixPolicyChecklist | null;
+  policyWarnings: string[];
+  editorNotes: string | null;
+  approvedByUserId: string | null;
+  approvedAt: string | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  costUsd: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RemixTriggerResult = {
+  remakeId: string;
+  jobId: string;
 };
 
 export type Story = {
@@ -237,6 +267,17 @@ export const api = {
       apiFetch<ViralBoard[]>(
         `/viral/boards${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
       ),
+    createBoard: (body: {
+      projectId: string;
+      boardKey: string;
+      label: string;
+      genre: string;
+      enabled?: boolean;
+    }) =>
+      apiFetch<ViralBoard>("/viral/boards", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
     triggerCrawl: (boardId: string) =>
       apiFetch<{ jobId: string; status: string }>(`/viral/boards/${boardId}/crawl`, {
         method: "POST",
@@ -259,6 +300,46 @@ export const api = {
       apiFetch<ViralCrawlRun[]>(
         `/viral/crawl-runs${boardId ? `?boardId=${encodeURIComponent(boardId)}` : ""}`,
       ),
+  },
+  remix: {
+    trigger: (body: { projectId: string; viralItemId?: string; shareUrl?: string }) =>
+      apiFetch<RemixTriggerResult>("/viral/remix", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    list: (params: { projectId: string; status?: string; viralItemId?: string }) => {
+      const query = new URLSearchParams();
+      query.set("projectId", params.projectId);
+      if (params.status) query.set("status", params.status);
+      if (params.viralItemId) query.set("viralItemId", params.viralItemId);
+      const qs = query.toString();
+      return apiFetch<ViralRemake[]>(`/viral/remix${qs ? `?${qs}` : ""}`);
+    },
+    get: (id: string) => apiFetch<ViralRemake>(`/viral/remix/${id}`),
+    update: (
+      id: string,
+      body: {
+        packageJson?: RemixPackageV1;
+        policyChecklist?: RemixPolicyChecklist;
+        editorNotes?: string;
+      },
+    ) =>
+      apiFetch<ViralRemake>(`/viral/remix/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    approve: (id: string) =>
+      apiFetch<ViralRemake>(`/viral/remix/${id}/approve`, { method: "POST" }),
+    reject: (id: string) =>
+      apiFetch<ViralRemake>(`/viral/remix/${id}/reject`, { method: "POST" }),
+    regenerate: (id: string) =>
+      apiFetch<RemixTriggerResult>(`/viral/remix/${id}/regenerate`, { method: "POST" }),
+    exportUrl: (id: string) => `${API_BASE}/viral/remix/${id}/export`,
+    triggerFromItem: (itemId: string, projectId: string) =>
+      apiFetch<RemixTriggerResult>(`/viral/items/${itemId}/remix`, {
+        method: "POST",
+        body: JSON.stringify({ projectId }),
+      }),
   },
   stories: {
     list: (projectId?: string) =>
