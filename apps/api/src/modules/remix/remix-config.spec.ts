@@ -3,6 +3,8 @@ import {
   assertFullScriptAllowed,
   getMediaDownloadTimeoutMs,
   getRemixScriptMode,
+  getSttCostPerMinuteUsd,
+  getSttModel,
   getSttResponseFormat,
 } from "./remix-config";
 
@@ -42,5 +44,16 @@ describe("remix-config", () => {
     process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
     delete process.env.REMIX_STT_API_URL;
     expect(getSttResponseFormat()).toBe("json");
+  });
+
+  it("defaults STT model to OpenRouter turbo", () => {
+    delete process.env.REMIX_STT_MODEL;
+    expect(getSttModel()).toBe("openai/whisper-large-v3-turbo");
+  });
+
+  it("infers turbo STT cost from model name", () => {
+    process.env.REMIX_STT_MODEL = "openai/whisper-large-v3-turbo";
+    delete process.env.REMIX_STT_COST_PER_MINUTE_USD;
+    expect(getSttCostPerMinuteUsd()).toBeCloseTo(0.04 / 60);
   });
 });
