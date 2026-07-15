@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Job as BullJob } from "bullmq";
 import type { JobsService } from "../../modules/jobs/jobs.service";
 import type { PromptsService } from "../../modules/prompts/prompts.service";
+import type { RemixStorageService } from "../../modules/remix/remix-storage.service";
 import type { RemixService } from "../../modules/remix/remix.service";
 import type { PrismaService } from "../../prisma/prisma.service";
 import { RemixProcessor } from "./remix.processor";
@@ -89,6 +90,10 @@ describe("RemixProcessor", () => {
     getRemake: ReturnType<typeof vi.fn>;
     computePolicyWarnings: ReturnType<typeof vi.fn>;
   };
+  let remixStorage: {
+    putAudio: ReturnType<typeof vi.fn>;
+    getAudio: ReturnType<typeof vi.fn>;
+  };
   let processor: RemixProcessor;
 
   beforeEach(() => {
@@ -117,6 +122,10 @@ describe("RemixProcessor", () => {
       getRemake: vi.fn(),
       computePolicyWarnings: vi.fn().mockReturnValue([]),
     };
+    remixStorage = {
+      putAudio: vi.fn().mockResolvedValue(undefined),
+      getAudio: vi.fn().mockResolvedValue(Buffer.from("audio")),
+    };
 
     mockResolveShareUrl.mockResolvedValue({
       videoId: "fake-video-001",
@@ -136,6 +145,7 @@ describe("RemixProcessor", () => {
       jobsService as unknown as JobsService,
       promptsService as unknown as PromptsService,
       remixService as unknown as RemixService,
+      remixStorage as unknown as RemixStorageService,
     );
   });
 
@@ -275,7 +285,7 @@ describe("RemixProcessor", () => {
     expect(markFailed).toHaveBeenCalledWith(prisma, "job_fail", "not found");
     expect(prisma.viralRemake.update).toHaveBeenCalledWith({
       where: { id: "missing" },
-      data: { status: "failed" },
+      data: { status: "failed", pipelinePhase: "failed" },
     });
   });
 });

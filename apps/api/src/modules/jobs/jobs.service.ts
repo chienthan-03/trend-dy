@@ -120,6 +120,25 @@ export class JobsService {
     return { jobId: job.id, status: job.status };
   }
 
+  /**
+   * Enqueue a repeatable job in BullMQ.
+   * Repeatable jobs are NOT persisted in the Postgres Jobs table by default,
+   * as they are managed by BullMQ's scheduler.
+   */
+  async enqueueRepeatable(
+    type: string,
+    payload: Record<string, unknown>,
+    repeat: { every?: number; cron?: string },
+  ): Promise<void> {
+    const queueName = resolveQueueName(type);
+    const queue = this.queues[queueName];
+
+    await queue.add(type, payload, {
+      repeat,
+      jobId: `repeatable:${type}`, // deterministic ID to avoid duplicates
+    });
+  }
+
   async list(filters: ListJobsFilters = {}): Promise<Job[]> {
     const where: Prisma.JobWhereInput = {};
 

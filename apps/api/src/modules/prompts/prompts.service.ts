@@ -2,11 +2,13 @@ import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { PROMPT_TEMPLATE_SEEDS } from "../../ai/prompts/generation.v1";
 import type { GenerationType } from "../../ai/prompts/generation.types";
 import { REMIX_PACKAGE_V1_SEED } from "../../ai/prompts/remix.package.v1";
+import { REMIX_PACKAGE_V2_SEED } from "../../ai/prompts/remix.package.v2";
 import { PrismaService } from "../../prisma/prisma.service";
 
 const PROMPT_TEMPLATE_SEED_ROWS = [
   ...PROMPT_TEMPLATE_SEEDS,
   REMIX_PACKAGE_V1_SEED,
+  REMIX_PACKAGE_V2_SEED,
 ];
 
 @Injectable()

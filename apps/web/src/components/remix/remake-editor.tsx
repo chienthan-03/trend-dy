@@ -19,12 +19,14 @@ const formatSrtPreview = (pkg: RemixPackageV1): string => {
 type RemakeEditorProps = {
   packageJson: RemixPackageV1;
   disabled?: boolean;
+  timingSource?: "estimated" | "stt";
   onChange: (next: RemixPackageV1) => void;
 };
 
 export const RemakeEditor = ({
   packageJson,
   disabled = false,
+  timingSource,
   onChange,
 }: RemakeEditorProps) => {
   const updateScript = (narration: string) => {
@@ -204,7 +206,14 @@ export const RemakeEditor = ({
       </fieldset>
 
       <div className="grid gap-1">
-        <Label htmlFor="srt-preview">Subtitles (SRT preview)</Label>
+        <Label htmlFor="srt-preview">
+          Subtitles (SRT preview)
+          {timingSource === "stt" && (
+            <span className="ml-2 font-normal text-blue-600">
+              (Phụ đề timing từ STT)
+            </span>
+          )}
+        </Label>
         <pre
           id="srt-preview"
           className="max-h-64 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800"

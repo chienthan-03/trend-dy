@@ -12,10 +12,13 @@ import {
   literalOverlapRatio,
   type RemixPackageV1,
   type RemixPolicyChecklist,
+  type RemixTranscriptV1,
 } from "@factory/shared";
 import { PrismaService } from "../../prisma/prisma.service";
 import { JobsService } from "../jobs/jobs.service";
 import type { UpdateRemixDto } from "./dto/update-remix.dto";
+import { assertFullScriptAllowed, getRemixScriptMode } from "./remix-config";
+import { isTranslateEnabled, shouldSkipRemixGenerate } from "./translate-config";
 
 export type TriggerRemixInput = {
   projectId: string;
@@ -77,6 +80,8 @@ export class RemixService {
       throw new ServiceUnavailableException("Remix is disabled");
     }
 
+    assertFullScriptAllowed();
+
     const { projectId, viralItemId, shareUrl } = input;
     if (!viralItemId && !shareUrl?.trim()) {
       throw new BadRequestException("viralItemId or shareUrl is required");
@@ -123,6 +128,25 @@ export class RemixService {
     return remake;
   }
 
+  async getTranscript(id: string): Promise<{
+    transcript: RemixTranscriptV1 | null;
+    translatedTranscript: RemixTranscriptV1 | null;
+    pipelinePhase: string;
+    videoDurationSec: number | null;
+    scriptMode: string;
+  }> {
+    const remake = await this.getRemake(id);
+
+    return {
+      transcript: (remake.sourceTranscript as RemixTranscriptV1 | null) ?? null,
+      translatedTranscript:
+        (remake.sourceTranscriptTranslated as RemixTranscriptV1 | null) ?? null,
+      pipelinePhase: remake.pipelinePhase,
+      videoDurationSec: remake.videoDurationSec,
+      scriptMode: remake.scriptMode,
+    };
+  }
+
   async updateRemake(id: string, dto: UpdateRemixDto): Promise<ViralRemake> {
     await this.getRemake(id);
 
@@ -148,15 +172,119 @@ export class RemixService {
       throw new ServiceUnavailableException("Remix is disabled");
     }
 
+    const scriptMode = remake.scriptMode ?? getRemixScriptMode();
+    let jobType:
+      | "remix_generate"
+      | "remix_translate"
+      | "remix_stt"
+      | "remix_download_media";
+    let pipelinePhase: string | undefined;
+
+    if (scriptMode === "full") {
+      if (
+        remake.sourceTranscript &&
+        isTranslateEnabled() &&
+        !remake.sourceTranscriptTranslated
+      ) {
+        jobType = "remix_translate";
+        pipelinePhase = "translating";
+      } else if (remake.sourceTranscript || remake.sourceTranscriptTranslated) {
+        jobType = "remix_generate";
+        pipelinePhase = "generating";
+      } else if (remake.mediaAudioKey) {
+        jobType = "remix_stt";
+        pipelinePhase = "transcribing";
+      } else {
+        jobType = "remix_download_media";
+        pipelinePhase = "downloading_media";
+      }
+    } else {
+      jobType = "remix_generate";
+    }
+
     const job = await this.jobsService.enqueue({
-      type: "remix_generate",
+      type: jobType,
+      payload:
+        jobType === "remix_translate"
+          ? { remakeId: remake.id, chainGenerate: !shouldSkipRemixGenerate() }
+          : { remakeId: remake.id },
+      idempotencyKey: `${jobType}:${remake.id}:${Date.now()}`,
+    });
+
+    const updateData: Prisma.ViralRemakeUpdateInput = { status: "running" };
+    if (pipelinePhase !== undefined) {
+      updateData.pipelinePhase = pipelinePhase;
+    }
+
+    await this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: updateData,
+    });
+
+    return { remakeId: remake.id, jobId: job.jobId };
+  }
+
+  async retranscribe(id: string): Promise<TriggerRemixResult> {
+    const remake = await this.getRemake(id);
+
+    if (!isRemixEnabled()) {
+      throw new ServiceUnavailableException("Remix is disabled");
+    }
+
+    if (!remake.mediaAudioKey) {
+      throw new BadRequestException(
+        "Remake has no stored audio for retranscription",
+      );
+    }
+
+    const job = await this.jobsService.enqueue({
+      type: "remix_stt",
       payload: { remakeId: remake.id },
-      idempotencyKey: `remix_generate:${remake.id}:${Date.now()}`,
+      idempotencyKey: `remix_stt:${remake.id}:${Date.now()}`,
     });
 
     await this.prisma.viralRemake.update({
       where: { id: remake.id },
-      data: { status: "running" },
+      data: {
+        status: "running",
+        pipelinePhase: "transcribing",
+        sourceTranscriptTranslated: null,
+      },
+    });
+
+    return { remakeId: remake.id, jobId: job.jobId };
+  }
+
+  async retranslate(id: string): Promise<TriggerRemixResult> {
+    const remake = await this.getRemake(id);
+
+    if (!isRemixEnabled()) {
+      throw new ServiceUnavailableException("Remix is disabled");
+    }
+
+    if (!remake.sourceTranscript) {
+      throw new BadRequestException(
+        "Remake has no source transcript to translate",
+      );
+    }
+
+    if (!isTranslateEnabled()) {
+      throw new BadRequestException("Transcript translation is disabled");
+    }
+
+    const job = await this.jobsService.enqueue({
+      type: "remix_translate",
+      payload: { remakeId: remake.id, chainGenerate: false },
+      idempotencyKey: `remix_translate:${remake.id}:${Date.now()}`,
+    });
+
+    await this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: {
+        status: "running",
+        pipelinePhase: "translating",
+        sourceTranscriptTranslated: null,
+      },
     });
 
     return { remakeId: remake.id, jobId: job.jobId };
@@ -256,6 +384,8 @@ export class RemixService {
         sourceUrl: item.canonicalUrl,
         genre: item.genres[0] ?? null,
         status: "pending",
+        scriptMode: getRemixScriptMode(),
+        pipelinePhase: "pending",
         usagePolicy: "remix_draft",
         policyChecklist: defaultRemixPolicyChecklist() as Prisma.InputJsonValue,
       },
@@ -282,6 +412,8 @@ export class RemixService {
         externalVideoId: PENDING_EXTERNAL_VIDEO_ID,
         sourceUrl: shareUrl,
         status: "pending",
+        scriptMode: getRemixScriptMode(),
+        pipelinePhase: "pending",
         usagePolicy: "remix_draft",
         policyChecklist: defaultRemixPolicyChecklist() as Prisma.InputJsonValue,
       },

@@ -1,6 +1,9 @@
 export const REMIX_JOB_TYPES = [
   "remix_resolve",
   "remix_fetch_detail",
+  "remix_download_media",
+  "remix_stt",
+  "remix_translate",
   "remix_generate",
 ] as const;
 export type RemixJobType = (typeof REMIX_JOB_TYPES)[number];
@@ -44,4 +47,40 @@ export type RemixPolicyChecklist = {
   voiceWillBeRerecorded: boolean;
   noFullReupload: boolean;
   leadApproved: boolean;
+};
+
+export const REMIX_SCRIPT_MODES = ["caption", "full"] as const;
+export type RemixScriptMode = (typeof REMIX_SCRIPT_MODES)[number];
+
+export const REMIX_PIPELINE_PHASES = [
+  "pending",
+  "resolving",
+  "fetching_detail",
+  "downloading_media",
+  "transcribing",
+  "translating",
+  "generating",
+  "ready",
+  "failed",
+] as const;
+export type RemixPipelinePhase = (typeof REMIX_PIPELINE_PHASES)[number];
+
+export type RemixTranscriptSegment = {
+  startSec: number;
+  endSec: number;
+  text: string;
+};
+
+export type RemixTranscriptV1 = {
+  version: 1;
+  language: string;
+  durationSec: number;
+  segments: RemixTranscriptSegment[];
+  fullText: string;
+  provider: string;
+  model: string;
+};
+
+export type RemixSubtitlesV2 = RemixPackageV1["subtitles"] & {
+  timing_source: "estimated" | "stt";
 };

@@ -4,7 +4,11 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import type { RemixPackageV1 } from "@factory/shared";
+import {
+  buildSrtFromSegments,
+  type RemixPackageV1,
+  type RemixTranscriptV1,
+} from "@factory/shared";
 import { ZipArchive } from "archiver";
 import { PassThrough } from "node:stream";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -56,7 +60,8 @@ export class RemixExportService {
     }
 
     const pkg = remake.packageJson as RemixPackageV1;
-    const stream = this.createZipStream(pkg);
+    const transcript = remake.sourceTranscript as RemixTranscriptV1 | null;
+    const stream = this.createZipStream(pkg, transcript);
 
     return {
       stream,
@@ -64,7 +69,10 @@ export class RemixExportService {
     };
   }
 
-  private createZipStream(pkg: RemixPackageV1): PassThrough {
+  private createZipStream(
+    pkg: RemixPackageV1,
+    transcript: RemixTranscriptV1 | null,
+  ): PassThrough {
     const archive = new ZipArchive({ zlib: { level: 9 } });
     const passthrough = new PassThrough();
 
@@ -74,6 +82,14 @@ export class RemixExportService {
 
     archive.pipe(passthrough);
 
+    if (transcript) {
+      archive.append(transcript.fullText, { name: "transcript-source.txt" });
+      archive.append(buildSrtFromSegments(transcript.segments), {
+        name: "transcript-source.srt",
+      });
+    }
+
+    archive.append(pkg.script.narration, { name: "script-full.txt" });
     archive.append(pkg.script.narration, { name: "script.txt" });
     archive.append(pkg.hook_3s.spoken, { name: "hook.txt" });
     archive.append(this.buildSrtFromCues(pkg.subtitles.cues), {

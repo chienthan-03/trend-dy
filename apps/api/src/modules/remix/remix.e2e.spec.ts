@@ -2,6 +2,7 @@ import "../../load-env";
 import "reflect-metadata";
 import { Module, ValidationPipe, type INestApplication } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
+import type { Job as BullJob } from "bullmq";
 import cookieParser from "cookie-parser";
 import JSZip from "jszip";
 import {
@@ -13,8 +14,10 @@ import {
 } from "vitest";
 import { AppModule } from "../../app.module";
 import { JobsModule } from "../jobs/jobs.module";
+import { JobsService, type EnqueueInput, type EnqueueResult } from "../jobs/jobs.service";
 import { PromptsModule } from "../prompts/prompts.module";
 import { RemixModule } from "./remix.module";
+import { RemixStorageService } from "./remix-storage.service";
 import { PrismaModule } from "../../prisma/prisma.module";
 import { PrismaService } from "../../prisma/prisma.service";
 import { QueueModule } from "../../queue/queue.module";
@@ -24,9 +27,72 @@ process.env.DOUYIN_ADAPTER = "fake";
 process.env.LLM_MODE = "fake";
 process.env.REMIX_ENABLED = "true";
 
+const createdJobIdsForSync: string[] = [];
+const e2eAudioStore = new Map<string, Buffer>();
+
+const createE2eRemixStorage = (): RemixStorageService =>
+  ({
+    audioKey: (remakeId: string) => `remix/${remakeId}/source-audio.wav`,
+    putAudio: async (remakeId: string, wav: Buffer) => {
+      const key = `remix/${remakeId}/source-audio.wav`;
+      e2eAudioStore.set(key, wav);
+      return key;
+    },
+    getAudio: async (key: string) => {
+      const audio = e2eAudioStore.get(key);
+      if (!audio) {
+        throw new Error(`Missing e2e audio for key ${key}`);
+      }
+      return audio;
+    },
+    deleteAudio: async (key: string) => {
+      e2eAudioStore.delete(key);
+    },
+  }) as RemixStorageService;
+
+/** Inline remix_* enqueue so e2e tests do not race with a local dev worker. */
+const patchSyncRemixEnqueue = (
+  jobsService: JobsService,
+  processor: RemixProcessor,
+  prisma: PrismaService,
+): void => {
+  const originalEnqueue = jobsService.enqueue.bind(jobsService);
+
+  jobsService.enqueue = async (input: EnqueueInput): Promise<EnqueueResult> => {
+    if (!input.type.startsWith("remix_")) {
+      return originalEnqueue(input);
+    }
+
+    const job = await prisma.job.create({
+      data: {
+        type: input.type,
+        status: "queued",
+        storyId: input.storyId ?? null,
+        payload: (input.payload ?? {}) as never,
+      },
+    });
+
+    createdJobIdsForSync.push(job.id);
+
+    await processor.process({
+      id: job.id,
+      name: input.type,
+      data: input.payload ?? {},
+    } as BullJob);
+
+    return { jobId: job.id, status: "completed" };
+  };
+};
+
 @Module({
   imports: [QueueModule, PrismaModule, JobsModule, PromptsModule, RemixModule],
-  providers: [RemixProcessor],
+  providers: [
+    RemixProcessor,
+    {
+      provide: RemixStorageService,
+      useFactory: createE2eRemixStorage,
+    },
+  ],
 })
 class RemixE2eWorkerModule {}
 
@@ -164,6 +230,7 @@ describe("Remix pipeline (e2e)", () => {
 
   beforeAll(async () => {
     workerApp = await NestFactory.createApplicationContext(RemixE2eWorkerModule);
+    const processor = workerApp.get(RemixProcessor);
 
     app = await NestFactory.create(AppModule);
     app.setGlobalPrefix("api/v1");
@@ -183,6 +250,8 @@ describe("Remix pipeline (e2e)", () => {
 
     baseUrl = `http://127.0.0.1:${address.port}`;
     prisma = app.get(PrismaService);
+    patchSyncRemixEnqueue(workerApp.get(JobsService), processor, prisma);
+    patchSyncRemixEnqueue(app.get(JobsService), processor, prisma);
 
     const loginResponse = await fetch(`${baseUrl}/api/v1/auth/login`, {
       method: "POST",
@@ -220,8 +289,9 @@ describe("Remix pipeline (e2e)", () => {
   });
 
   afterAll(async () => {
-    if (createdJobIds.length > 0) {
-      await prisma.job.deleteMany({ where: { id: { in: createdJobIds } } });
+    const allJobIds = [...createdJobIds, ...createdJobIdsForSync];
+    if (allJobIds.length > 0) {
+      await prisma.job.deleteMany({ where: { id: { in: allJobIds } } });
     }
 
     if (createdRemakeIds.length > 0) {
@@ -308,11 +378,12 @@ describe("Remix pipeline (e2e)", () => {
     const zip = await JSZip.loadAsync(zipBuffer);
     const fileNames = Object.keys(zip.files).sort();
 
-    expect(fileNames).toEqual(
+    expect(fileNames.sort()).toEqual(
       [
         "hook.txt",
         "package.json",
         "package.srt",
+        "script-full.txt",
         "script.txt",
         "titles.txt",
       ].sort(),
@@ -348,5 +419,125 @@ describe("Remix pipeline (e2e)", () => {
     expect(
       linked.find((row) => row.id === trigger.remakeId)?.viralItemId,
     ).toBe(item.id);
+  });
+
+  describe("full-script pipeline", () => {
+    let originalScriptMode: string | undefined;
+    let originalAllowDownload: string | undefined;
+    let originalSttMode: string | undefined;
+    let originalMediaAdapter: string | undefined;
+
+    beforeAll(() => {
+      originalScriptMode = process.env.REMIX_SCRIPT_MODE;
+      originalAllowDownload = process.env.REMIX_ALLOW_MEDIA_DOWNLOAD;
+      originalSttMode = process.env.REMIX_STT_MODE;
+      originalMediaAdapter = process.env.REMIX_MEDIA_ADAPTER;
+
+      process.env.REMIX_SCRIPT_MODE = "full";
+      process.env.REMIX_ALLOW_MEDIA_DOWNLOAD = "true";
+      process.env.REMIX_STT_MODE = "fake";
+      process.env.REMIX_MEDIA_ADAPTER = "fake";
+    });
+
+    afterAll(() => {
+      process.env.REMIX_SCRIPT_MODE = originalScriptMode;
+      process.env.REMIX_ALLOW_MEDIA_DOWNLOAD = originalAllowDownload;
+      process.env.REMIX_STT_MODE = originalSttMode;
+      process.env.REMIX_MEDIA_ADAPTER = originalMediaAdapter;
+    });
+
+    it("runs full-script pipeline with transcript and SRT export", async () => {
+      const remake = await prisma.viralRemake.create({
+        data: {
+          projectId,
+          externalVideoId: "pending",
+          scriptMode: "full",
+          pipelinePhase: "pending",
+          status: "pending",
+          usagePolicy: "remix_draft",
+        },
+      });
+      createdRemakeIds.push(remake.id);
+
+      const processor = workerApp.get(RemixProcessor);
+      const resolveJob = await prisma.job.create({
+        data: {
+          type: "remix_resolve",
+          status: "queued",
+          payload: {
+            remakeId: remake.id,
+            shareUrl: "https://v.douyin.com/full-script-test/",
+          },
+        },
+      });
+      createdJobIdsForSync.push(resolveJob.id);
+
+      await processor.process({
+        id: resolveJob.id,
+        name: "remix_resolve",
+        data: {
+          remakeId: remake.id,
+          shareUrl: "https://v.douyin.com/full-script-test/",
+        },
+      } as BullJob);
+
+      const ready = await pollRemakeReady(remake.id);
+      expect(ready.status).toBe("ready");
+
+      const fullRemake = await prisma.viralRemake.findUnique({
+        where: { id: remake.id },
+      });
+
+      expect(fullRemake?.sourceTranscript).not.toBeNull();
+      const transcript = fullRemake?.sourceTranscript as {
+        segments: unknown[];
+      };
+      expect(transcript.segments.length).toBeGreaterThan(0);
+      const pkg = fullRemake?.packageJson as {
+        script?: { narration?: string };
+      };
+      expect(pkg.script?.narration?.length ?? 0).toBeGreaterThan(200);
+
+      // Approve and export via API
+      await apiJson(`/viral/remix/${remake.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          policyChecklist: completeChecklist(),
+        }),
+      });
+
+      await apiJson(`/viral/remix/${remake.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+
+      const exportResponse = await apiFetch(`/viral/remix/${remake.id}/export`);
+      expect(exportResponse.status).toBe(200);
+
+      const zipBuffer = Buffer.from(await exportResponse.arrayBuffer());
+      const zip = await JSZip.loadAsync(zipBuffer);
+      const fileNames = Object.keys(zip.files);
+
+      expect(fileNames).toContain("transcript-source.srt");
+      expect(fileNames).toContain("transcript-source.txt");
+    });
+
+    it("rejects trigger when script mode is full but media download is disabled", async () => {
+      process.env.REMIX_ALLOW_MEDIA_DOWNLOAD = "false";
+
+      const response = await apiFetch("/viral/remix", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId,
+          shareUrl: "https://v.douyin.com/reject-test/",
+        }),
+      });
+
+      expect(response.status).toBe(503);
+      const body = await response.json();
+      expect(body.message).toContain("REMIX_ALLOW_MEDIA_DOWNLOAD=true");
+
+      process.env.REMIX_ALLOW_MEDIA_DOWNLOAD = "true";
+    });
   });
 });

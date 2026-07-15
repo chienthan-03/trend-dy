@@ -71,6 +71,21 @@ export class RemixController {
     return this.remixService.regenerate(id);
   }
 
+  @Post(":id/retranscribe")
+  retranscribeRemake(@Param("id") id: string) {
+    return this.remixService.retranscribe(id);
+  }
+
+  @Post(":id/retranslate")
+  retranslateRemake(@Param("id") id: string) {
+    return this.remixService.retranslate(id);
+  }
+
+  @Get(":id/transcript")
+  getTranscript(@Param("id") id: string) {
+    return this.remixService.getTranscript(id);
+  }
+
   @Get(":id/export")
   async exportRemake(@Param("id") id: string): Promise<StreamableFile> {
     const { stream, filename } = await this.remixExportService.exportRemake(id);

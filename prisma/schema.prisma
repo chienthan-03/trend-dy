@@ -172,6 +172,14 @@ model ViralRemake {
   costUsd          Float?    @map("cost_usd")
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
+  scriptMode         String    @default("caption") @map("script_mode")
+  pipelinePhase      String    @default("pending") @map("pipeline_phase")
+  sourceTranscript           Json?     @map("source_transcript")
+  sourceTranscriptTranslated Json?     @map("source_transcript_translated")
+  mediaAudioKey              String?   @map("media_audio_key")
+  mediaExpiresAt     DateTime? @map("media_expires_at")
+  videoDurationSec   Float?    @map("video_duration_sec")
+  sttCostUsd         Float?    @map("stt_cost_usd")
 
   project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
   viralItem ViralItem? @relation(fields: [viralItemId], references: [id], onDelete: SetNull)
@@ -179,6 +187,7 @@ model ViralRemake {
   @@index([projectId, status, createdAt(sort: Desc)])
   @@index([viralItemId])
   @@index([externalVideoId])
+  @@index([mediaExpiresAt])
   @@map("viral_remakes")
 }
 

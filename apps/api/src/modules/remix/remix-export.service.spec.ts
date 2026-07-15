@@ -3,7 +3,8 @@ import {
   ForbiddenException,
   NotFoundException,
 } from "@nestjs/common";
-import type { RemixPackageV1 } from "@factory/shared";
+import type { RemixPackageV1, RemixTranscriptV1 } from "@factory/shared";
+import { buildSrtFromSegments } from "@factory/shared";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../../prisma/prisma.service";
@@ -48,6 +49,19 @@ const samplePackage = (): RemixPackageV1 => ({
     rewrite_strategy: "recap",
     risks: [],
   },
+});
+
+const sampleTranscript = (): RemixTranscriptV1 => ({
+  version: 1,
+  language: "zh",
+  durationSec: 8,
+  segments: [
+    { startSec: 0, endSec: 3, text: "原始第一句" },
+    { startSec: 3, endSec: 8, text: "原始第二句" },
+  ],
+  fullText: "原始第一句 原始第二句",
+  provider: "openai",
+  model: "whisper-1",
 });
 
 const completeChecklist = () => ({
@@ -137,7 +151,7 @@ describe("RemixExportService", () => {
       );
     });
 
-    it("builds zip with script.txt, hook.txt, package.srt, titles.txt, package.json", async () => {
+    it("builds zip with script-full.txt, script.txt, hook.txt, package.srt, titles.txt, package.json", async () => {
       const pkg = samplePackage();
       prisma.viralRemake.findUnique.mockResolvedValue({
         id: "remake_1",
@@ -151,6 +165,7 @@ describe("RemixExportService", () => {
       const zip = await JSZip.loadAsync(zipBuffer);
 
       const expectedFiles = [
+        "script-full.txt",
         "script.txt",
         "hook.txt",
         "package.srt",
@@ -160,6 +175,9 @@ describe("RemixExportService", () => {
       expect(Object.keys(zip.files).sort()).toEqual(expectedFiles.sort());
 
       expect(await zip.file("script.txt")!.async("string")).toBe(
+        pkg.script.narration,
+      );
+      expect(await zip.file("script-full.txt")!.async("string")).toBe(
         pkg.script.narration,
       );
       expect(await zip.file("hook.txt")!.async("string")).toBe(
@@ -173,6 +191,35 @@ describe("RemixExportService", () => {
       );
       expect(JSON.parse(await zip.file("package.json")!.async("string"))).toEqual(
         pkg,
+      );
+    });
+
+    it("includes transcript-source files when sourceTranscript is present", async () => {
+      const pkg = samplePackage();
+      const transcript = sampleTranscript();
+      prisma.viralRemake.findUnique.mockResolvedValue({
+        id: "remake_1",
+        usagePolicy: "approved_for_export",
+        policyChecklist: completeChecklist(),
+        packageJson: pkg,
+        sourceTranscript: transcript,
+      });
+
+      const { stream } = await service.exportRemake("remake_1");
+      const zipBuffer = await collectStream(stream);
+      const zip = await JSZip.loadAsync(zipBuffer);
+
+      expect(zip.file("transcript-source.txt")).not.toBeNull();
+      expect(zip.file("transcript-source.srt")).not.toBeNull();
+
+      expect(await zip.file("transcript-source.txt")!.async("string")).toBe(
+        transcript.fullText,
+      );
+
+      const srt = await zip.file("transcript-source.srt")!.async("string");
+      expect(srt).toBe(buildSrtFromSegments(transcript.segments));
+      expect(srt.split("\n\n").filter(Boolean)).toHaveLength(
+        transcript.segments.length,
       );
     });
   });

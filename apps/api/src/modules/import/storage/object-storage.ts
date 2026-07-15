@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -12,6 +13,7 @@ export type ObjectStorage = {
     contentType?: string,
   ) => Promise<void>;
   getObject: (key: string) => Promise<Buffer>;
+  deleteObject: (key: string) => Promise<void>;
   getSignedDownloadUrl: (key: string, expiresInSeconds?: number) => Promise<string>;
 };
 
@@ -67,6 +69,11 @@ export const createObjectStorage = (
       throw new Error(`Empty S3 object: ${key}`);
     }
     return Buffer.from(bytes);
+  },
+  deleteObject: async (key) => {
+    await client.send(
+      new DeleteObjectCommand({ Bucket: bucket, Key: key }),
+    );
   },
   getSignedDownloadUrl: async (key, expiresInSeconds = 3600) =>
     getSignedUrl(

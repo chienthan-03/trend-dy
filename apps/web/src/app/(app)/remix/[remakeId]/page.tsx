@@ -4,14 +4,19 @@ import {
   defaultRemixPolicyChecklist,
   isPolicyChecklistComplete,
   type RemixPackageV1,
+  type RemixPipelinePhase,
   type RemixPolicyChecklist,
+  type RemixScriptMode,
+  type RemixTranscriptV1,
 } from "@factory/shared";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PipelineStatusBadge } from "@/components/remix/pipeline-status-badge";
 import { PolicyChecklist } from "@/components/remix/policy-checklist";
 import { RemakeEditor } from "@/components/remix/remake-editor";
 import { RemakeSourcePanel } from "@/components/remix/remake-source-panel";
+import { RemakeTranscriptPanel } from "@/components/remix/remake-transcript-panel";
 import {
   Alert,
   Badge,
@@ -37,6 +42,9 @@ const RemakeStudioPage = () => {
   const remakeId = params.remakeId;
 
   const [remake, setRemake] = useState<ViralRemake | null>(null);
+  const [transcript, setTranscript] = useState<RemixTranscriptV1 | null>(null);
+  const [translatedTranscript, setTranslatedTranscript] =
+    useState<RemixTranscriptV1 | null>(null);
   const [packageJson, setPackageJson] = useState<RemixPackageV1 | null>(null);
   const [policyChecklist, setPolicyChecklist] = useState<RemixPolicyChecklist>(
     defaultRemixPolicyChecklist(),
@@ -51,6 +59,20 @@ const RemakeStudioPage = () => {
     try {
       const data = await api.remix.get(remakeId);
       setRemake(data);
+
+      if (
+        data.pipelinePhase === "ready" ||
+        data.scriptMode === "full" ||
+        data.pipelinePhase === "translating"
+      ) {
+        try {
+          const tData = await api.remix.getTranscript(remakeId);
+          setTranscript(tData.transcript);
+          setTranslatedTranscript(tData.translatedTranscript);
+        } catch (err) {
+          console.error("Failed to load transcript:", err);
+        }
+      }
 
       const shouldSyncFromServer =
         !dirtyRef.current || isProcessingStatus(data.status);
@@ -76,7 +98,10 @@ const RemakeStudioPage = () => {
     void load();
   }, [load]);
 
-  const processing = remake ? isProcessingStatus(remake.status) : false;
+  const processing = remake
+    ? isProcessingStatus(remake.status) ||
+      (remake.pipelinePhase !== "ready" && remake.pipelinePhase !== "failed")
+    : false;
 
   useEffect(() => {
     if (!processing) return;
@@ -119,6 +144,17 @@ const RemakeStudioPage = () => {
     setError(null);
     setInfo(null);
     try {
+      // Approve reads checklist from DB — persist local checklist first.
+      const saved = await api.remix.update(remakeId, {
+        ...(packageJson ? { packageJson } : {}),
+        policyChecklist,
+      });
+      setRemake(saved);
+      setPolicyChecklist(
+        saved.policyChecklist ?? defaultRemixPolicyChecklist(),
+      );
+      dirtyRef.current = false;
+
       const updated = await api.remix.approve(remakeId);
       setRemake(updated);
       setInfo("Approved for export.");
@@ -137,6 +173,21 @@ const RemakeStudioPage = () => {
       const updated = await api.remix.reject(remakeId);
       setRemake(updated);
       setInfo("Remake archived.");
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const handleRetranslate = async () => {
+    setPending("retranslate");
+    setError(null);
+    setInfo(null);
+    try {
+      const result = await api.remix.retranslate(remakeId);
+      setInfo(`Transcript translation queued (job ${result.jobId}).`);
+      await load();
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -203,6 +254,10 @@ const RemakeStudioPage = () => {
         <>
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={remake.status} />
+            <PipelineStatusBadge
+              pipelinePhase={remake.pipelinePhase as RemixPipelinePhase}
+              status={remake.status}
+            />
             <Badge
               tone={
                 remake.usagePolicy === "approved_for_export"
@@ -231,23 +286,53 @@ const RemakeStudioPage = () => {
           ) : null}
 
           <Card title="Source">
-            <RemakeSourcePanel
-              sourceSnapshot={remake.sourceSnapshot}
-              sourceUrl={remake.sourceUrl}
-              genre={remake.genre}
-            />
+            <div className="space-y-4">
+              <RemakeSourcePanel
+                sourceSnapshot={remake.sourceSnapshot}
+                sourceUrl={remake.sourceUrl}
+                genre={remake.genre}
+              />
+              <RemakeTranscriptPanel
+                transcript={transcript}
+                translatedTranscript={translatedTranscript}
+                videoDurationSec={remake.videoDurationSec}
+                scriptMode={remake.scriptMode as RemixScriptMode}
+                pipelinePhase={remake.pipelinePhase}
+                onRetranslate={handleRetranslate}
+                retranslatePending={pending === "retranslate"}
+              />
+            </div>
           </Card>
 
           <Card title="Remix package">
             {packageJson ? (
-              <RemakeEditor
-                packageJson={packageJson}
-                disabled={!canEdit}
-                onChange={(next) => {
-                  dirtyRef.current = true;
-                  setPackageJson(next);
-                }}
-              />
+              <div className="space-y-4">
+                {remake.scriptMode === "full" && (
+                  <div className="rounded-md bg-blue-50 p-3 text-xs text-blue-800">
+                    <p className="font-semibold">Chế độ Script đầy đủ</p>
+                    <p>
+                      Độ dài narration:{" "}
+                      <span className="font-bold">
+                        {packageJson.script.narration.length}
+                      </span>{" "}
+                      ký tự. Mục tiêu gợi ý: ~
+                      <span className="font-bold">
+                        {Math.round((remake.videoDurationSec || 0) * 10)}
+                      </span>{" "}
+                      ký tự (10 ký tự/giây).
+                    </p>
+                  </div>
+                )}
+                <RemakeEditor
+                  packageJson={packageJson}
+                  disabled={!canEdit}
+                  timingSource={remake.scriptMode === "full" ? "stt" : "estimated"}
+                  onChange={(next) => {
+                    dirtyRef.current = true;
+                    setPackageJson(next);
+                  }}
+                />
+              </div>
             ) : (
               <EmptyState>
                 {processing
@@ -309,7 +394,11 @@ const RemakeStudioPage = () => {
                   remake.status === "archived" ||
                   pending === "regenerate"
                 }
-                aria-label="Re-run AI to regenerate remix package"
+                aria-label={
+                  remake.scriptMode === "full"
+                    ? "Re-run AI to regenerate full script and timing"
+                    : "Re-run AI to regenerate remix package"
+                }
               >
                 {pending === "regenerate" ? "Queuing…" : "Re-run AI"}
               </Button>
@@ -325,6 +414,11 @@ const RemakeStudioPage = () => {
             {!checklistComplete && canEdit ? (
               <p className="mt-3 text-xs text-gray-500">
                 Complete all policy checklist items to enable approval.
+              </p>
+            ) : null}
+            {checklistComplete && canEdit ? (
+              <p className="mt-3 text-xs text-gray-500">
+                Checklist is saved automatically when you approve for export.
               </p>
             ) : null}
           </Card>

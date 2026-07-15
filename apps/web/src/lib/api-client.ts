@@ -1,4 +1,8 @@
-import type { RemixPackageV1, RemixPolicyChecklist } from "@factory/shared";
+import type {
+  RemixPackageV1,
+  RemixPolicyChecklist,
+  RemixTranscriptV1,
+} from "@factory/shared";
 
 const API_BASE = "/api/v1";
 
@@ -127,6 +131,9 @@ export type ViralRemake = {
   sourceSnapshot: unknown;
   genre: string | null;
   status: string;
+  scriptMode: string;
+  pipelinePhase: string;
+  videoDurationSec: number | null;
   usagePolicy: string;
   packageJson: RemixPackageV1 | null;
   policyChecklist: RemixPolicyChecklist | null;
@@ -144,6 +151,14 @@ export type ViralRemake = {
 export type RemixTriggerResult = {
   remakeId: string;
   jobId: string;
+};
+
+export type RemixTranscriptResponse = {
+  transcript: RemixTranscriptV1 | null;
+  translatedTranscript: RemixTranscriptV1 | null;
+  pipelinePhase: string;
+  videoDurationSec: number | null;
+  scriptMode: string;
 };
 
 export type Story = {
@@ -347,6 +362,16 @@ export const api = {
       apiFetch<ViralRemake>(`/viral/remix/${id}/reject`, { method: "POST" }),
     regenerate: (id: string) =>
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/regenerate`, { method: "POST" }),
+    getTranscript: (id: string) =>
+      apiFetch<RemixTranscriptResponse>(`/viral/remix/${id}/transcript`),
+    retranscribe: (id: string) =>
+      apiFetch<RemixTriggerResult>(`/viral/remix/${id}/retranscribe`, {
+        method: "POST",
+      }),
+    retranslate: (id: string) =>
+      apiFetch<RemixTriggerResult>(`/viral/remix/${id}/retranslate`, {
+        method: "POST",
+      }),
     exportUrl: (id: string) => `${API_BASE}/viral/remix/${id}/export`,
     triggerFromItem: (itemId: string, projectId: string) =>
       apiFetch<RemixTriggerResult>(`/viral/items/${itemId}/remix`, {

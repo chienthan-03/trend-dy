@@ -9,6 +9,7 @@ const KNOWN_FIXTURES: Record<string, Omit<DouyinVideoDetail, "videoId">> = {
     stats: { likes: 128_000, comments: 3_420, shares: 890 },
     coverUrl: "https://example.test/fake/fake-video-001/cover.jpg",
     canonicalUrl: "https://example.test/fake/fake-video-001",
+    playUrl: "https://example.test/fake/fake-video-001/play.mp4",
     publishedAt: new Date(Date.UTC(2026, 0, 15, 8, 30, 0)),
     rawPayload: { source: "fake-douyin-video-adapter", fixture: "fake-video-001" },
   },
@@ -40,6 +41,7 @@ const buildFixtureDetail = (videoId: string): DouyinVideoDetail => {
     },
     coverUrl: `https://example.test/fake/${seed}/cover.jpg`,
     canonicalUrl: `https://example.test/fake/${seed}`,
+    playUrl: `https://example.test/fake/${videoId}/play.mp4`,
     publishedAt,
     rawPayload: { source: "fake-douyin-video-adapter", videoId, seed },
   };

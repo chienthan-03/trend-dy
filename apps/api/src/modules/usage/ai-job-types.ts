@@ -6,7 +6,8 @@ export const isAiBudgetedJobType = (type: string): boolean => {
     return (
       queue === "understand" ||
       queue === "generate" ||
-      type === "remix_generate"
+      type === "remix_generate" ||
+      type === "remix_stt"
     );
   } catch {
     return false;

@@ -258,6 +258,98 @@ const FAKE_VI_BY_TYPE: Record<string, string> = {
   }),
 };
 
+const secToSrtTimestamp = (sec: number): string => {
+  const totalMs = Math.max(0, Math.round(sec * 1000));
+  const hours = Math.floor(totalMs / 3_600_000);
+  const minutes = Math.floor((totalMs % 3_600_000) / 60_000);
+  const seconds = Math.floor((totalMs % 60_000) / 1000);
+  const ms = totalMs % 1000;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+};
+
+const parseDurationFromTranscriptPrompt = (prompt: string): number => {
+  const match = prompt.match(/Duration:\s*(\d+(?:\.\d+)?)s/);
+  if (match?.[1]) {
+    return Number(match[1]);
+  }
+  return 120;
+};
+
+const buildFakeRemixGenerateV2 = (prompt: string): string => {
+  const durationSec = parseDurationFromTranscriptPrompt(prompt);
+  const narration =
+    "Một thiếu niên tu tiên bất ngờ nhận được hệ thống thần bí trong lúc đang tu luyện trên núi. " +
+    "Anh ta bắt đầu hành trình vạn dặm qua nhiều thử thách khắc nghiệt, gặp gỡ sư phụ tài ba, kết giao đồng môn trung thành, " +
+    "đối mặt kẻ thù mạnh mẽ và khám phá bí mật cổ xưa ẩn giấu trong thế giới tu tiên. " +
+    "Cuối cùng anh dần trở thành cao thủ được vạn giới ngưỡng mộ.";
+
+  const segmentCountMatch = prompt.match(/Transcript segments \((\d+)\)/);
+  const segmentCount = segmentCountMatch?.[1]
+    ? Number(segmentCountMatch[1])
+    : 4;
+  const cues = Array.from({ length: Math.max(1, segmentCount) }, (_, index) => {
+    const startSec = (durationSec / segmentCount) * index;
+    const endSec = (durationSec / segmentCount) * (index + 1);
+    return {
+      start: secToSrtTimestamp(startSec),
+      end: secToSrtTimestamp(endSec),
+      text: `Đoạn recap ${index + 1}: nội dung được viết lại theo phong cách kể chuyện tiếng Việt.`,
+    };
+  });
+
+  return JSON.stringify({
+    locale: "vi",
+    script: {
+      narration,
+      duration_estimate_sec: durationSec,
+      sections: [
+        { label: "hook", text: "Bạn có tin chuyện này bắt đầu từ một viên đá?" },
+        ...cues.map((_, index) => ({
+          label: `body_${index}`,
+          text: `Phần ${index + 1} của câu chuyện recap.`,
+        })),
+      ],
+    },
+    hook_3s: {
+      spoken: "Bạn có tin chuyện này bắt đầu từ một viên đá?",
+      on_screen: "HỆ THỐNG THỨC TỈNH",
+      visual_hint: "close-up shocked face",
+    },
+    banners: {
+      top: "RECAP TU TIÊN",
+      bottom: "Theo dõi để xem tiếp",
+      watermark: "STUDIO ALPHA",
+    },
+    packaging: {
+      titles: ["Tiêu đề A", "Tiêu đề B", "Tiêu đề C"],
+      description: "Recap đầy đủ — theo dõi để không bỏ lỡ!",
+      hashtags: ["tu_tien", "recap", "douyin"],
+    },
+    subtitles: {
+      format: "srt",
+      timing_source: "stt",
+      cues,
+    },
+    transform_notes: {
+      input_mode: "transcript_full",
+      source_duration_sec: durationSec,
+      source_language: "zh",
+      rewrite_strategy: "recap_vn_inspired",
+      risks: [],
+    },
+  });
+};
+
+const isTranscriptAwareRemixPrompt = (prompt: string): boolean =>
+  prompt.includes("Transcript segments") || prompt.includes('"startSec"');
+
+const resolveFakeText = (prompt: string, type: string): string => {
+  if (type === "remix_generate" && isTranscriptAwareRemixPrompt(prompt)) {
+    return buildFakeRemixGenerateV2(prompt);
+  }
+  return FAKE_VI_BY_TYPE[type] ?? `[VI mẫu] ${type}`;
+};
+
 const completeTextWithOpenAi = async (
   prompt: string,
   system?: string,
@@ -316,7 +408,7 @@ export const completeText = async (
 
   if (process.env.LLM_MODE === "fake") {
     const type = options?.type ?? "unknown";
-    const text = FAKE_VI_BY_TYPE[type] ?? `[VI mẫu] ${type}`;
+    const text = resolveFakeText(prompt, type);
     return {
       text,
       model: "fake",
