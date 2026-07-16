@@ -307,22 +307,6 @@ const RemakeStudioPage = () => {
           <Card title="Remix package">
             {packageJson ? (
               <div className="space-y-4">
-                {remake.scriptMode === "full" && (
-                  <div className="rounded-md bg-blue-50 p-3 text-xs text-blue-800">
-                    <p className="font-semibold">Chế độ Script đầy đủ</p>
-                    <p>
-                      Độ dài narration:{" "}
-                      <span className="font-bold">
-                        {packageJson.script.narration.length}
-                      </span>{" "}
-                      ký tự. Mục tiêu gợi ý: ~
-                      <span className="font-bold">
-                        {Math.round((remake.videoDurationSec || 0) * 10)}
-                      </span>{" "}
-                      ký tự (10 ký tự/giây).
-                    </p>
-                  </div>
-                )}
                 <RemakeEditor
                   packageJson={packageJson}
                   disabled={!canEdit}

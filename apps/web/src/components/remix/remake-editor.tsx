@@ -29,20 +29,6 @@ export const RemakeEditor = ({
   timingSource,
   onChange,
 }: RemakeEditorProps) => {
-  const updateScript = (narration: string) => {
-    onChange({
-      ...packageJson,
-      script: { ...packageJson.script, narration },
-    });
-  };
-
-  const updateHook = (field: keyof RemixPackageV1["hook_3s"], value: string) => {
-    onChange({
-      ...packageJson,
-      hook_3s: { ...packageJson.hook_3s, [field]: value },
-    });
-  };
-
   const updateBanner = (field: keyof RemixPackageV1["banners"], value: string) => {
     onChange({
       ...packageJson,
@@ -84,56 +70,6 @@ export const RemakeEditor = ({
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-1">
-        <Label htmlFor="remix-script">Remix script (VN narration)</Label>
-        <textarea
-          id="remix-script"
-          className="min-h-[10rem] w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-          value={packageJson.script.narration}
-          onChange={(event) => updateScript(event.target.value)}
-          disabled={disabled}
-          aria-label="Remix script narration"
-        />
-        <p className="text-xs text-gray-500">
-          Est. {packageJson.script.duration_estimate_sec}s ·{" "}
-          {packageJson.script.sections.length} sections
-        </p>
-      </div>
-
-      <fieldset className="grid gap-3 rounded border border-gray-200 p-3" disabled={disabled}>
-        <legend className="px-1 text-sm font-medium text-gray-700">Hook 3s</legend>
-        <div className="grid gap-1">
-          <Label htmlFor="hook-spoken">Spoken</Label>
-          <Input
-            id="hook-spoken"
-            value={packageJson.hook_3s.spoken}
-            onChange={(event) => updateHook("spoken", event.target.value)}
-            disabled={disabled}
-            aria-label="Hook spoken text"
-          />
-        </div>
-        <div className="grid gap-1">
-          <Label htmlFor="hook-on-screen">On screen</Label>
-          <Input
-            id="hook-on-screen"
-            value={packageJson.hook_3s.on_screen}
-            onChange={(event) => updateHook("on_screen", event.target.value)}
-            disabled={disabled}
-            aria-label="Hook on-screen text"
-          />
-        </div>
-        <div className="grid gap-1">
-          <Label htmlFor="hook-visual">Visual hint</Label>
-          <Input
-            id="hook-visual"
-            value={packageJson.hook_3s.visual_hint}
-            onChange={(event) => updateHook("visual_hint", event.target.value)}
-            disabled={disabled}
-            aria-label="Hook visual hint"
-          />
-        </div>
-      </fieldset>
-
       <fieldset className="grid gap-3 rounded border border-gray-200 p-3" disabled={disabled}>
         <legend className="px-1 text-sm font-medium text-gray-700">Banners</legend>
         <div className="grid gap-1">

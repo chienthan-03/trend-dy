@@ -8,11 +8,6 @@ const CHECKLIST_ITEMS: Array<{
   label: string;
 }> = [
   {
-    key: "scriptRewritten",
-    label: "Script is rewritten (not literal translation)",
-  },
-  { key: "hookIsNew", label: "Hook text is new (not copied from source)" },
-  {
     key: "hasStudioBrand",
     label: "Banner/watermark includes studio brand",
   },

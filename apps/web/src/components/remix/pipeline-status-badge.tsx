@@ -35,11 +35,13 @@ export const PipelineStatusBadge = ({
   if (isProcessing && pipelinePhase !== "pending") tone = "warning";
 
   return (
-    <Badge tone={tone} className="flex items-center gap-1.5">
-      {isProcessing && pipelinePhase !== "ready" && pipelinePhase !== "failed" && (
-        <Spinner className="animate-pulse" />
-      )}
-      {label}
+    <Badge tone={tone}>
+      <span className="flex items-center gap-1.5">
+        {isProcessing && pipelinePhase !== "ready" && pipelinePhase !== "failed" && (
+          <Spinner className="animate-pulse" />
+        )}
+        {label}
+      </span>
     </Badge>
   );
 };
