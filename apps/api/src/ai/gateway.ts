@@ -216,20 +216,6 @@ const FAKE_VI_BY_TYPE: Record<string, string> = {
   "pack.hook_3s": "Bạn có tin chuyện này lại bắt đầu từ một viên đá vô danh?",
   remix_generate: JSON.stringify({
     locale: "vi",
-    script: {
-      narration:
-        "Một thiếu niên bất ngờ nhận được sức mạnh ẩn giấu và bước vào hành trình đổi đời.",
-      duration_estimate_sec: 120,
-      sections: [
-        { label: "hook", text: "Bạn có tin chuyện này bắt đầu từ một viên đá?" },
-        { label: "body", text: "Câu chuyện mở ra với một nhân vật bình thường..." },
-      ],
-    },
-    hook_3s: {
-      spoken: "Bạn có tin chuyện này bắt đầu từ một viên đá?",
-      on_screen: "BÍ MẬT BẤT NGỜ",
-      visual_hint: "close-up shocked face",
-    },
     banners: {
       top: "RECAP HOT",
       bottom: "Theo dõi để xem tiếp",
@@ -277,11 +263,6 @@ const parseDurationFromTranscriptPrompt = (prompt: string): number => {
 
 const buildFakeRemixGenerateV2 = (prompt: string): string => {
   const durationSec = parseDurationFromTranscriptPrompt(prompt);
-  const narration =
-    "Một thiếu niên tu tiên bất ngờ nhận được hệ thống thần bí trong lúc đang tu luyện trên núi. " +
-    "Anh ta bắt đầu hành trình vạn dặm qua nhiều thử thách khắc nghiệt, gặp gỡ sư phụ tài ba, kết giao đồng môn trung thành, " +
-    "đối mặt kẻ thù mạnh mẽ và khám phá bí mật cổ xưa ẩn giấu trong thế giới tu tiên. " +
-    "Cuối cùng anh dần trở thành cao thủ được vạn giới ngưỡng mộ.";
 
   const segmentCountMatch = prompt.match(/Transcript segments \((\d+)\)/);
   const segmentCount = segmentCountMatch?.[1]
@@ -299,22 +280,6 @@ const buildFakeRemixGenerateV2 = (prompt: string): string => {
 
   return JSON.stringify({
     locale: "vi",
-    script: {
-      narration,
-      duration_estimate_sec: durationSec,
-      sections: [
-        { label: "hook", text: "Bạn có tin chuyện này bắt đầu từ một viên đá?" },
-        ...cues.map((_, index) => ({
-          label: `body_${index}`,
-          text: `Phần ${index + 1} của câu chuyện recap.`,
-        })),
-      ],
-    },
-    hook_3s: {
-      spoken: "Bạn có tin chuyện này bắt đầu từ một viên đá?",
-      on_screen: "HỆ THỐNG THỨC TỈNH",
-      visual_hint: "close-up shocked face",
-    },
     banners: {
       top: "RECAP TU TIÊN",
       bottom: "Theo dõi để xem tiếp",
