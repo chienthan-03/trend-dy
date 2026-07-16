@@ -13,4 +13,5 @@ coverage/
 prisma/*.db
 generated/
 .data/
+backups/
 vendor/redis-7/
