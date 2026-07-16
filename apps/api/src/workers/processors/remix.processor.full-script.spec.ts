@@ -23,12 +23,6 @@ vi.mock("../../ai/gateway", () => ({
   completeText: vi.fn().mockResolvedValue({
     text: JSON.stringify({
       locale: "vi",
-      script: {
-        narration: "Narrative",
-        duration_estimate_sec: 10,
-        sections: [{ label: "intro", text: "Welcome" }],
-      },
-      hook_3s: { spoken: "Hook", on_screen: "H", visual_hint: "V" },
       banners: { top: "T", bottom: "B", watermark: "W" },
       packaging: { titles: ["T"], description: "D", hashtags: ["#H"] },
       subtitles: {
@@ -104,6 +98,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.REMIX_SKIP_GENERATE = "false";
 
     prisma = {
       viralRemake: {

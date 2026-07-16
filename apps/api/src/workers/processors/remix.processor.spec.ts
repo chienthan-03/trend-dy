@@ -22,16 +22,6 @@ vi.mock("../../ai/gateway", () => ({
   completeText: vi.fn().mockResolvedValue({
     text: JSON.stringify({
       locale: "vi",
-      script: {
-        narration: "Kịch bản recap mới hoàn toàn khác caption gốc.",
-        duration_estimate_sec: 90,
-        sections: [{ label: "body", text: "Nội dung recap." }],
-      },
-      hook_3s: {
-        spoken: "Điều gì khiến anh chàng này bức bối?",
-        on_screen: "BẤT NGỜ",
-        visual_hint: "zoom in",
-      },
       banners: {
         top: "RECAP",
         bottom: "Follow",
@@ -191,6 +181,7 @@ describe("RemixProcessor", () => {
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
       externalVideoId: "fake-video-001",
+      scriptMode: "caption",
     });
 
     const job = {

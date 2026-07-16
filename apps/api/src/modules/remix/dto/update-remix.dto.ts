@@ -11,14 +11,6 @@ import type { RemixPackageV1, RemixPolicyChecklist } from "@factory/shared";
 class RemixPolicyChecklistDto {
   @IsOptional()
   @IsBoolean()
-  scriptRewritten?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  hookIsNew?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
   hasStudioBrand?: boolean;
 
   @IsOptional()

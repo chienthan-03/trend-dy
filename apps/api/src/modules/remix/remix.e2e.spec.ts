@@ -26,6 +26,9 @@ import { RemixProcessor } from "../../workers/processors/remix.processor";
 process.env.DOUYIN_ADAPTER = "fake";
 process.env.LLM_MODE = "fake";
 process.env.REMIX_ENABLED = "true";
+process.env.REMIX_SCRIPT_MODE = "caption";
+process.env.REMIX_SKIP_GENERATE = "false";
+process.env.REMIX_MEDIA_ADAPTER = "fake";
 
 const createdJobIdsForSync: string[] = [];
 const e2eAudioStore = new Map<string, Buffer>();
@@ -97,8 +100,6 @@ const patchSyncRemixEnqueue = (
 class RemixE2eWorkerModule {}
 
 const completeChecklist = () => ({
-  scriptRewritten: true,
-  hookIsNew: true,
   hasStudioBrand: true,
   voiceWillBeRerecorded: true,
   noFullReupload: true,
@@ -161,8 +162,9 @@ describe("Remix pipeline (e2e)", () => {
       const remake = await apiJson<{
         status: string;
         packageJson?: {
-          script?: { narration?: string };
-          hook_3s?: { spoken?: string };
+          banners?: { watermark?: string };
+          packaging?: { titles?: string[] };
+          subtitles?: { cues?: unknown[] };
         };
       }>(`/viral/remix/${remakeId}`);
 
@@ -331,8 +333,9 @@ describe("Remix pipeline (e2e)", () => {
     const remake = await pollRemakeReady(trigger.remakeId);
 
     expect(remake.status).toBe("ready");
-    expect(remake.packageJson?.script?.narration?.length ?? 0).toBeGreaterThan(50);
-    expect(remake.packageJson?.hook_3s?.spoken?.length ?? 0).toBeGreaterThan(0);
+    expect(remake.packageJson?.banners?.watermark?.length ?? 0).toBeGreaterThan(0);
+    expect(remake.packageJson?.packaging?.titles?.length ?? 0).toBeGreaterThan(0);
+    expect(remake.packageJson?.subtitles?.cues?.length ?? 0).toBeGreaterThan(0);
   });
 
   it("blocks export until checklist is complete and remix is approved", async () => {
@@ -380,11 +383,10 @@ describe("Remix pipeline (e2e)", () => {
 
     expect(fileNames.sort()).toEqual(
       [
-        "hook.txt",
+        "banners.txt",
+        "description.txt",
         "package.json",
         "package.srt",
-        "script-full.txt",
-        "script.txt",
         "titles.txt",
       ].sort(),
     );
@@ -408,8 +410,9 @@ describe("Remix pipeline (e2e)", () => {
     const remake = await pollRemakeReady(trigger.remakeId);
 
     expect(remake.status).toBe("ready");
-    expect(remake.packageJson?.script?.narration?.length ?? 0).toBeGreaterThan(50);
-    expect(remake.packageJson?.hook_3s?.spoken?.length ?? 0).toBeGreaterThan(0);
+    expect(remake.packageJson?.banners?.watermark?.length ?? 0).toBeGreaterThan(0);
+    expect(remake.packageJson?.packaging?.titles?.length ?? 0).toBeGreaterThan(0);
+    expect(remake.packageJson?.subtitles?.cues?.length ?? 0).toBeGreaterThan(0);
 
     const linked = await apiJson<Array<{ id: string; viralItemId: string | null }>>(
       `/viral/remix?viralItemId=${item.id}`,
@@ -437,6 +440,7 @@ describe("Remix pipeline (e2e)", () => {
       process.env.REMIX_ALLOW_MEDIA_DOWNLOAD = "true";
       process.env.REMIX_STT_MODE = "fake";
       process.env.REMIX_MEDIA_ADAPTER = "fake";
+      process.env.REMIX_SKIP_GENERATE = "false";
     });
 
     afterAll(() => {
@@ -494,9 +498,11 @@ describe("Remix pipeline (e2e)", () => {
       };
       expect(transcript.segments.length).toBeGreaterThan(0);
       const pkg = fullRemake?.packageJson as {
-        script?: { narration?: string };
+        packaging?: { titles?: string[] };
+        subtitles?: { cues?: unknown[] };
       };
-      expect(pkg.script?.narration?.length ?? 0).toBeGreaterThan(200);
+      expect(pkg.packaging?.titles?.length ?? 0).toBeGreaterThan(0);
+      expect(pkg.subtitles?.cues?.length ?? 0).toBeGreaterThan(0);
 
       // Approve and export via API
       await apiJson(`/viral/remix/${remake.id}`, {

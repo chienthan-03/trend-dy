@@ -6,8 +6,6 @@ import {
 import { RemixPolicyGuard } from "./remix-policy.guard";
 
 const completeChecklist = (): RemixPolicyChecklist => ({
-  scriptRewritten: true,
-  hookIsNew: true,
   hasStudioBrand: true,
   voiceWillBeRerecorded: true,
   noFullReupload: true,

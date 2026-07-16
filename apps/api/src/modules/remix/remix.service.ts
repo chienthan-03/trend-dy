@@ -9,7 +9,6 @@ import type { Prisma, ViralRemake } from "@prisma/client";
 import {
   defaultRemixPolicyChecklist,
   isPolicyChecklistComplete,
-  literalOverlapRatio,
   type RemixPackageV1,
   type RemixPolicyChecklist,
   type RemixTranscriptV1,
@@ -43,30 +42,11 @@ export type PolicyWarningInput = {
 };
 
 const PENDING_EXTERNAL_VIDEO_ID = "pending";
-const OVERLAP_WARNING_THRESHOLD = 0.7;
 
 export const isRemixEnabled = (): boolean => {
   const raw = process.env.REMIX_ENABLED?.trim().toLowerCase();
   return raw !== "false" && raw !== "0";
 };
-
-const firstCaptionSentence = (caption: string): string => {
-  const trimmed = caption.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  const match = trimmed.match(/^[^.!?。！？\n]+[.!?。！？]?/);
-  return (match?.[0] ?? trimmed).trim();
-};
-
-const normalizeSentence = (value: string): string =>
-  value.trim().replace(/[.!?。！？]+$/u, "").toLowerCase();
-
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 
 @Injectable()
 export class RemixService {
@@ -323,34 +303,13 @@ export class RemixService {
 
   computePolicyWarnings(input: PolicyWarningInput): string[] {
     const warnings: string[] = [];
-    const snapshot = asRecord(input.sourceSnapshot);
     const pkg = input.packageJson as RemixPackageV1 | null;
 
-    if (!snapshot || !pkg) {
+    if (!pkg) {
       return warnings;
     }
 
-    const caption = typeof snapshot.caption === "string" ? snapshot.caption : "";
-    const narration = pkg.script?.narration ?? "";
-    const hookSpoken = pkg.hook_3s?.spoken ?? "";
     const watermark = pkg.banners?.watermark ?? "";
-
-    if (
-      caption &&
-      narration &&
-      literalOverlapRatio(caption, narration) > OVERLAP_WARNING_THRESHOLD
-    ) {
-      warnings.push("Script quá giống caption gốc");
-    }
-
-    const firstSentence = firstCaptionSentence(caption);
-    if (
-      firstSentence &&
-      hookSpoken &&
-      normalizeSentence(hookSpoken) === normalizeSentence(firstSentence)
-    ) {
-      warnings.push("Hook chưa được viết mới");
-    }
 
     if (!watermark.trim()) {
       warnings.push("Thiếu branding");

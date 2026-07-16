@@ -167,46 +167,42 @@ describe("RemixService.computePolicyWarnings", () => {
     );
   });
 
-  it("warns when script overlaps caption heavily", () => {
-    const caption = "alpha beta gamma delta epsilon zeta";
-    const narration = "alpha beta gamma delta epsilon zeta eta theta";
-
-    const warnings = service.computePolicyWarnings({
-      sourceSnapshot: { caption },
-      packageJson: {
-        script: { narration, duration_estimate_sec: 30, sections: [] },
-        hook_3s: { spoken: "new hook", on_screen: "", visual_hint: "" },
-        banners: { top: "", bottom: "", watermark: "STUDIO" },
-      },
-    });
-
-    expect(warnings).toContain("Script quá giống caption gốc");
-  });
-
-  it("warns when hook matches first caption sentence", () => {
-    const warnings = service.computePolicyWarnings({
-      sourceSnapshot: { caption: "First sentence here. Second sentence." },
-      packageJson: {
-        script: { narration: "completely different text", duration_estimate_sec: 30, sections: [] },
-        hook_3s: { spoken: "First sentence here", on_screen: "", visual_hint: "" },
-        banners: { top: "", bottom: "", watermark: "STUDIO" },
-      },
-    });
-
-    expect(warnings).toContain("Hook chưa được viết mới");
-  });
-
   it("warns when watermark is empty", () => {
     const warnings = service.computePolicyWarnings({
       sourceSnapshot: { caption: "some caption" },
       packageJson: {
-        script: { narration: "unique narration", duration_estimate_sec: 30, sections: [] },
-        hook_3s: { spoken: "fresh hook", on_screen: "", visual_hint: "" },
+        locale: "vi",
         banners: { top: "", bottom: "", watermark: "" },
+        packaging: { titles: ["Title"], description: "Desc", hashtags: [] },
+        subtitles: { format: "srt", cues: [] },
+        transform_notes: {
+          source_language: "zh",
+          rewrite_strategy: "recap",
+          risks: [],
+        },
       },
     });
 
     expect(warnings).toContain("Thiếu branding");
+  });
+
+  it("returns no warnings when watermark is present", () => {
+    const warnings = service.computePolicyWarnings({
+      sourceSnapshot: { caption: "some caption" },
+      packageJson: {
+        locale: "vi",
+        banners: { top: "TOP", bottom: "BOTTOM", watermark: "STUDIO ALPHA" },
+        packaging: { titles: ["Title"], description: "Desc", hashtags: [] },
+        subtitles: { format: "srt", cues: [{ start: "00:00:00,000", end: "00:00:01,000", text: "Cue" }] },
+        transform_notes: {
+          source_language: "zh",
+          rewrite_strategy: "recap",
+          risks: [],
+        },
+      },
+    });
+
+    expect(warnings).toEqual([]);
   });
 });
 
