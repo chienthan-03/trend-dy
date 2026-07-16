@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { Badge, Button, formatGenre, Spinner, TierBadge } from "@/components/ui";
 import type { ViralItem } from "@/lib/api-client";
 
@@ -30,6 +31,18 @@ const pickStat = (
   return 0;
 };
 
+const formatCrawledAt = (value: string): string => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
 export const ViralCard = ({
   item,
   remakeId,
@@ -43,6 +56,12 @@ export const ViralCard = ({
   const shares = pickStat(item.stats, ["shares", "share_count"]);
   const primaryGenre = item.genres[0];
   const displayText = item.caption?.trim() || item.title;
+  const [coverFailed, setCoverFailed] = useState(false);
+  const showCover = Boolean(item.coverUrl) && !coverFailed;
+
+  const handleCoverError = () => {
+    setCoverFailed(true);
+  };
 
   return (
     <article
@@ -50,11 +69,12 @@ export const ViralCard = ({
       aria-label={`Viral item: ${item.title}`}
     >
       <div className="h-28 w-20 shrink-0 overflow-hidden rounded-md bg-gray-100">
-        {item.coverUrl ? (
+        {showCover ? (
           <img
-            src={item.coverUrl}
+            src={item.coverUrl!}
             alt=""
             className="h-full w-full object-cover"
+            onError={handleCoverError}
           />
         ) : (
           <div
@@ -76,6 +96,13 @@ export const ViralCard = ({
           {item.rankPosition != null ? (
             <Badge>#{item.rankPosition}</Badge>
           ) : null}
+          <time
+            dateTime={item.crawledAt}
+            className="text-xs text-gray-500"
+            title="Ngày crawl"
+          >
+            Crawl {formatCrawledAt(item.crawledAt)}
+          </time>
         </div>
 
         <p className="line-clamp-2 text-sm font-medium text-gray-900">

@@ -73,6 +73,7 @@ describe("LiveDouyinAdapter", () => {
                 comment_cnt_all: "18720",
                 share_cnt_all: "18022",
                 item_create_time: "1781179218",
+                cover_image_uri: "tos-cn-p-0015/oYFKsOWqSAYEAeSBEjuzF9MBCsLfIyjwAo0gED",
               },
               user_info: { name: "郭大美" },
             },
@@ -94,6 +95,8 @@ describe("LiveDouyinAdapter", () => {
       title: "小说推文 #书荒推文",
       authorHandle: "@郭大美",
       stats: { likes: 130047, comments: 18720, shares: 18022 },
+      coverUrl:
+        "https://p3.douyinpic.com/img/tos-cn-p-0015/oYFKsOWqSAYEAeSBEjuzF9MBCsLfIyjwAo0gED~c5_300x400.jpeg?from=3213915784",
     });
     expect(items[0]?.externalId).not.toMatch(/^fake-/);
   });

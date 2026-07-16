@@ -23,6 +23,20 @@ const pickString = (...values: unknown[]): string => {
   return "";
 };
 
+/** Hot-search returns `cover_image_uri` (tos-cn-… path), not a full CDN URL. */
+const DOUYIN_COVER_FROM = "3213915784";
+
+const resolveDouyinMediaUrl = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return `https://p3.douyinpic.com/img/${trimmed}~c5_300x400.jpeg?from=${DOUYIN_COVER_FROM}`;
+};
+
 const extractList = (data: unknown): unknown[] => {
   const root = asRecord(data);
   if (!root) {
@@ -155,10 +169,22 @@ const mapOneItem = (
   const coverObj = asRecord(row.video)?.cover ?? row.cover;
   const coverRecord = asRecord(coverObj);
   const coverUrlList = coverRecord?.url_list ?? coverRecord?.urlList;
-  const coverUrl =
+  const coverFromList =
     Array.isArray(coverUrlList) && typeof coverUrlList[0] === "string"
       ? coverUrlList[0]
-      : pickString(row.cover_url, row.coverUrl);
+      : "";
+  const coverUriOrUrl = pickString(
+    coverFromList,
+    row.cover_url,
+    row.coverUrl,
+    attrs.cover_image_url,
+    attrs.coverImageUrl,
+    attrs.cover_url,
+    attrs.cover_image_uri,
+    attrs.coverImageUri,
+    coverRecord?.uri,
+  );
+  const coverUrl = resolveDouyinMediaUrl(coverUriOrUrl);
 
   const canonicalUrl = pickString(
     row.share_url,
