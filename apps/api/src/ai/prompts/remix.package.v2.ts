@@ -35,16 +35,6 @@ export type RemixPackageV2 = z.infer<typeof remixPackageV2Schema>;
 
 export const REMIX_PACKAGE_V2_OUTPUT_SCHEMA = {
   locale: "vi",
-  script: {
-    narration: "string (cover entire video)",
-    duration_estimate_sec: "number (≈ source_duration_sec)",
-    sections: [{ label: "string", text: "string" }],
-  },
-  hook_3s: {
-    spoken: "string (≤3s spoken)",
-    on_screen: "string",
-    visual_hint: "string",
-  },
   banners: { top: "string", bottom: "string", watermark: "string" },
   packaging: {
     titles: ["string"],
@@ -66,17 +56,16 @@ export const REMIX_PACKAGE_V2_OUTPUT_SCHEMA = {
 } as const;
 
 export const REMIX_PACKAGE_V2_SYSTEM_RULES = [
-  "Bạn là biên kịch video recap tiếng Việt cho Douyin/TikTok.",
+  "Bạn là chuyên gia đóng gói video recap tiếng Việt cho Douyin/TikTok.",
   "",
   "Quy tắc bắt buộc:",
   "- Toàn bộ output phải bằng tiếng Việt.",
   "- Bạn nhận TRANSCRIPT đầy đủ của video (có timestamp từng đoạn).",
-  "- Viết narration tiếng Việt recap TOÀN BỘ nội dung video, không bỏ sót đoạn quan trọng.",
-  "- Viết lại theo phong cách recap; KHÔNG dịch word-by-word hay sentence-by-sentence.",
-  "- Độ dài narration tối thiểu: source_duration_sec × 10 ký tự.",
-  "- subtitles.cues phải bám timing STT (start/end giữ nguyên hoặc chỉnh nhẹ ≤500ms).",
+  "- Tạo banners (top, bottom, watermark) tiếng Việt phù hợp thể loại và nội dung transcript.",
+  "- Tạo packaging: titles (3 biến thể), description, hashtags tiếng Việt.",
+  "- Tạo subtitles SRT tiếng Việt từ transcript; subtitles.cues phải bám timing STT (start/end giữ nguyên hoặc chỉnh nhẹ ≤500ms).",
   "- subtitles.timing_source phải là \"stt\".",
-  "- Hook spoken phải gây chú ý ngay, ≤ 3 giây khi đọc ở tốc độ bình thường.",
+  "- Viết lại theo phong cách recap; KHÔNG dịch word-by-word hay sentence-by-sentence.",
   "- Nguồn chỉ để lấy cảm hứng; output phải đứng độc lập, không phụ thuộc nguyên bản.",
   "- Tránh sao chép nguyên văn tên riêng có bản quyền; dùng tương đương tiếng Việt khi tự nhiên.",
   "- Trả về JSON đúng schema remix.package.v2, không kèm markdown.",
@@ -87,7 +76,7 @@ export const REMIX_PACKAGE_V2_SYSTEM_RULES = [
 
 export const REMIX_PACKAGE_V2_SEED = {
   key: REMIX_PACKAGE_V2_KEY,
-  version: 1,
+  version: 2,
   locale: "vi",
   body: REMIX_PACKAGE_V2_SYSTEM_RULES,
   modelHint: "strong",
@@ -111,10 +100,10 @@ export const buildRemixPromptV2 = (
     `Locale output: ${input.locale}`,
     `Thể loại: ${input.genre}`,
     `Tiêu đề gốc: ${input.title}`,
-    "Caption/mô tả nguồn (chỉ tham khảo, viết lại recap tiếng Việt):",
+    "Caption/mô tả nguồn (tham khảo, tạo banners và packaging tiếng Việt):",
     input.caption,
     "",
-    `Transcript segments (${segmentCount}):`,
+    `Transcript segments (${segmentCount}) — tạo phụ đề tiếng Việt bám timing STT:`,
     JSON.stringify(input.transcript.segments, null, 2),
     "",
     "Full text:",

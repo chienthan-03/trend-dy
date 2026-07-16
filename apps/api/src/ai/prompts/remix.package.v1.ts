@@ -3,17 +3,6 @@ import { z } from "zod";
 
 export const REMIX_PACKAGE_V1_KEY = "remix.package.v1";
 
-const scriptSectionSchema = z.object({
-  label: z.string().min(1),
-  text: z.string().min(1),
-});
-
-const hook3sSchema = z.object({
-  spoken: z.string().min(1),
-  on_screen: z.string().min(1),
-  visual_hint: z.string().min(1),
-});
-
 const bannersSchema = z.object({
   top: z.string().min(1),
   bottom: z.string().min(1),
@@ -45,12 +34,6 @@ const transformNotesSchema = z.object({
 
 export const remixPackageV1Schema = z.object({
   locale: z.literal("vi"),
-  script: z.object({
-    narration: z.string().min(1),
-    duration_estimate_sec: z.number().positive(),
-    sections: z.array(scriptSectionSchema).min(1),
-  }),
-  hook_3s: hook3sSchema,
   banners: bannersSchema,
   packaging: packagingSchema,
   subtitles: subtitlesSchema,
@@ -59,16 +42,6 @@ export const remixPackageV1Schema = z.object({
 
 export const REMIX_PACKAGE_V1_OUTPUT_SCHEMA = {
   locale: "vi",
-  script: {
-    narration: "string",
-    duration_estimate_sec: "number",
-    sections: [{ label: "string", text: "string" }],
-  },
-  hook_3s: {
-    spoken: "string (≤3s spoken)",
-    on_screen: "string",
-    visual_hint: "string",
-  },
   banners: { top: "string", bottom: "string", watermark: "string" },
   packaging: {
     titles: ["string"],
@@ -87,12 +60,14 @@ export const REMIX_PACKAGE_V1_OUTPUT_SCHEMA = {
 } as const;
 
 export const REMIX_PACKAGE_V1_SYSTEM_RULES = [
-  "Bạn là biên kịch video recap tiếng Việt cho Douyin/TikTok.",
+  "Bạn là chuyên gia đóng gói video recap tiếng Việt cho Douyin/TikTok.",
   "",
   "Quy tắc bắt buộc:",
   "- Toàn bộ output phải bằng tiếng Việt.",
+  "- Tạo banners (top, bottom, watermark) tiếng Việt phù hợp thể loại và nội dung caption.",
+  "- Tạo packaging: titles (3 biến thể), description, hashtags tiếng Việt.",
+  "- Tạo subtitles SRT tiếng Việt từ caption; timing ước lượng (estimated) theo độ dài nội dung.",
   "- Viết lại theo phong cách recap; KHÔNG dịch word-by-word hay sentence-by-sentence.",
-  "- Hook spoken phải gây chú ý ngay, ≤ 3 giây khi đọc ở tốc độ bình thường.",
   "- Nguồn chỉ để lấy cảm hứng; output phải đứng độc lập, không phụ thuộc nguyên bản.",
   "- Tránh sao chép nguyên văn tên riêng có bản quyền; dùng tương đương tiếng Việt khi tự nhiên.",
   "- Trả về JSON đúng schema remix.package.v1, không kèm markdown.",
@@ -103,7 +78,7 @@ export const REMIX_PACKAGE_V1_SYSTEM_RULES = [
 
 export const REMIX_PACKAGE_V1_SEED = {
   key: REMIX_PACKAGE_V1_KEY,
-  version: 1,
+  version: 2,
   locale: "vi",
   body: REMIX_PACKAGE_V1_SYSTEM_RULES,
   modelHint: "strong",
@@ -124,7 +99,7 @@ export const buildRemixPrompt = (
     `Locale output: ${input.locale}`,
     `Thể loại: ${input.genre}`,
     `Tiêu đề gốc: ${input.title}`,
-    "Caption/mô tả nguồn (chỉ tham khảo, viết lại recap tiếng Việt):",
+    "Caption/mô tả nguồn (tạo banners, packaging và phụ đề tiếng Việt):",
     input.caption,
   ].join("\n");
 
