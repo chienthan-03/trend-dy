@@ -21,17 +21,13 @@ export type RemixUsagePolicy = (typeof REMIX_USAGE_POLICIES)[number];
 
 export type RemixPackageV1 = {
   locale: "vi";
-  script: {
-    narration: string;
-    duration_estimate_sec: number;
-    sections: Array<{ label: string; text: string }>;
-  };
-  hook_3s: { spoken: string; on_screen: string; visual_hint: string };
   banners: { top: string; bottom: string; watermark: string };
   packaging: { titles: string[]; description: string; hashtags: string[] };
   subtitles: {
     format: "srt";
     cues: Array<{ start: string; end: string; text: string }>;
+    /** Present on full-script (v2) packages; omit in caption mode. */
+    timing_source?: "estimated" | "stt";
   };
   transform_notes: {
     source_language: string;
@@ -41,8 +37,6 @@ export type RemixPackageV1 = {
 };
 
 export type RemixPolicyChecklist = {
-  scriptRewritten: boolean;
-  hookIsNew: boolean;
   hasStudioBrand: boolean;
   voiceWillBeRerecorded: boolean;
   noFullReupload: boolean;

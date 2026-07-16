@@ -1,8 +1,6 @@
-import type { RemixPolicyChecklist } from "./remix-types";
+import type { RemixPackageV1, RemixPolicyChecklist } from "./remix-types";
 
 export const defaultRemixPolicyChecklist = (): RemixPolicyChecklist => ({
-  scriptRewritten: false,
-  hookIsNew: false,
   hasStudioBrand: false,
   voiceWillBeRerecorded: false,
   noFullReupload: false,
@@ -28,9 +26,44 @@ export const literalOverlapRatio = (source: string, target: string): number => {
 };
 
 export const isPolicyChecklistComplete = (c: RemixPolicyChecklist): boolean =>
-  c.scriptRewritten &&
-  c.hookIsNew &&
   c.hasStudioBrand &&
   c.voiceWillBeRerecorded &&
   c.noFullReupload &&
   c.leadApproved;
+
+export const toSlimRemixPackage = (raw: unknown): RemixPackageV1 => {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const banners = (o.banners ?? {}) as RemixPackageV1["banners"];
+  const packaging = (o.packaging ?? {}) as RemixPackageV1["packaging"];
+  const subtitles = (o.subtitles ?? { format: "srt", cues: [] }) as RemixPackageV1["subtitles"];
+  const transform_notes = (o.transform_notes ?? {
+    source_language: "unknown",
+    rewrite_strategy: "packaging_subtitles",
+    risks: [],
+  }) as RemixPackageV1["transform_notes"];
+
+  return {
+    locale: "vi",
+    banners: {
+      top: banners.top ?? "",
+      bottom: banners.bottom ?? "",
+      watermark: banners.watermark ?? "",
+    },
+    packaging: {
+      titles: Array.isArray(packaging.titles) ? packaging.titles : [],
+      description: packaging.description ?? "",
+      hashtags: Array.isArray(packaging.hashtags) ? packaging.hashtags : [],
+    },
+    subtitles: {
+      format: "srt",
+      cues: Array.isArray(subtitles.cues) ? subtitles.cues : [],
+      ...(typeof (subtitles as { timing_source?: string }).timing_source === "string"
+        ? {
+            timing_source: (subtitles as { timing_source: "estimated" | "stt" })
+              .timing_source,
+          }
+        : {}),
+    } as RemixPackageV1["subtitles"],
+    transform_notes,
+  };
+};
