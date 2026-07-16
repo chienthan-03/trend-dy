@@ -19,9 +19,27 @@ const WHISPER_FIXTURE = {
 };
 
 describe("estimateSttCostUsd", () => {
-  it("charges Whisper rate per minute", () => {
+  const env = process.env;
+
+  beforeEach(() => {
+    process.env = { ...env };
+  });
+
+  afterEach(() => {
+    process.env = env;
+  });
+
+  it("charges whisper-1 rate per minute", () => {
+    process.env.REMIX_STT_MODEL = "whisper-1";
+    delete process.env.REMIX_STT_COST_PER_MINUTE_USD;
     expect(estimateSttCostUsd(60)).toBeCloseTo(0.006);
     expect(estimateSttCostUsd(120)).toBeCloseTo(0.012);
+  });
+
+  it("charges turbo rate per minute", () => {
+    process.env.REMIX_STT_MODEL = "openai/whisper-large-v3-turbo";
+    delete process.env.REMIX_STT_COST_PER_MINUTE_USD;
+    expect(estimateSttCostUsd(60)).toBeCloseTo(0.04 / 60);
   });
 });
 
@@ -85,12 +103,13 @@ describe("transcribeAudio", () => {
   it("returns valid RemixTranscriptV1 in fake mode", async () => {
     process.env.REMIX_STT_MODE = "fake";
     process.env.REMIX_FAKE_DURATION_SEC = "60";
+    process.env.REMIX_STT_MODEL = "openai/whisper-large-v3-turbo";
 
     const result = await transcribeAudio(Buffer.from("test-wav-data"));
 
     expect(result.transcript.version).toBe(1);
     expect(result.transcript.provider).toBe("fake");
-    expect(result.transcript.model).toBe("whisper-1");
+    expect(result.transcript.model).toBe("openai/whisper-large-v3-turbo");
     expect(result.transcript.language).toBe("zh");
     expect(result.transcript.durationSec).toBe(60);
     expect(result.transcript.segments.length).toBeGreaterThanOrEqual(8);
@@ -100,7 +119,7 @@ describe("transcribeAudio", () => {
     );
     expect(result.transcript.segments[0]!.startSec).toBe(0);
     expect(result.transcript.segments.at(-1)!.endSec).toBe(60);
-    expect(result.costUsd).toBeCloseTo(0.006);
+    expect(result.costUsd).toBeCloseTo(0.04 / 60);
   });
 
   it("defaults to fake mode when REMIX_STT_MODE is unset", async () => {

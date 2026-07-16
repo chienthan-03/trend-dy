@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import type { RemixTranscriptV1 } from "@factory/shared";
-import { getSttMaxUploadMb, getSttApiBaseUrl, getSttResponseFormat, getSttAudioBitrateKbps } from "../modules/remix/remix-config";
+import {
+  getSttMaxUploadMb,
+  getSttApiBaseUrl,
+  getSttResponseFormat,
+  getSttAudioBitrateKbps,
+  getSttCostPerMinuteUsd,
+  getSttModel,
+} from "../modules/remix/remix-config";
 import {
   compressAudioBufferForStt,
   splitMp3ForStt,
@@ -10,8 +17,6 @@ export type TranscribeAudioResult = {
   transcript: RemixTranscriptV1;
   costUsd: number;
 };
-
-const WHISPER_COST_PER_MINUTE_USD = 0.006;
 
 const FAKE_CHINESE_LINES = [
   "这是一个测试片段。",
@@ -145,7 +150,7 @@ export const mapWhisperResponseToTranscript = (
 };
 
 export const estimateSttCostUsd = (durationSec: number): number =>
-  (durationSec / 60) * WHISPER_COST_PER_MINUTE_USD;
+  (durationSec / 60) * getSttCostPerMinuteUsd();
 
 const getFakeDurationSec = (): number => {
   const n = Number(process.env.REMIX_FAKE_DURATION_SEC ?? "60");
@@ -182,7 +187,7 @@ const buildFakeTranscript = (
   const hash = createHash("sha256").update(wavBuffer).digest();
   const durationSec = getFakeDurationSec();
   const segmentCount = 8 + (hash[0]! % 5);
-  const model = process.env.REMIX_STT_MODEL ?? "whisper-1";
+  const model = getSttModel();
 
   const segments = Array.from({ length: segmentCount }, (_, index) => {
     const startSec = (durationSec / segmentCount) * index;
@@ -221,7 +226,7 @@ const transcribeWithOpenAi = async (
     throw new Error("OPENAI_API_KEY is required when REMIX_STT_MODE is live");
   }
 
-  const model = process.env.REMIX_STT_MODEL ?? "whisper-1";
+  const model = getSttModel();
   const baseUrl = getSttApiBaseUrl();
   const responseFormat = getSttResponseFormat();
   const provider =
@@ -280,7 +285,7 @@ const transcribeChunkedMp3 = async (
   languageHint?: string,
 ): Promise<TranscribeAudioResult> => {
   const chunks = await splitMp3ForStt(mp3Buffer);
-  const model = process.env.REMIX_STT_MODEL ?? "whisper-1";
+  const model = getSttModel();
   const provider =
     process.env.REMIX_STT_API_URL?.trim() || !process.env.AI_GATEWAY_URL?.trim()
       ? "openai"

@@ -9,6 +9,7 @@
     "dev:web": "pnpm --filter web dev",
     "dev:worker": "pnpm --filter api start:worker",
     "dev:redis": "powershell -ExecutionPolicy Bypass -File scripts/start-redis.ps1",
+    "clean:fake-viral": "node scripts/clean-fake-viral-data.js",
     "build": "echo \"TODO: build workspace\"",
     "test": "echo \"TODO: run tests\"",
     "lint": "echo \"TODO: lint workspace\""

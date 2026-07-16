@@ -47,6 +47,30 @@ export const getSttAudioBitrateKbps = (): number => {
   return Number.isFinite(n) && n > 0 ? n : 24;
 };
 
+/** OpenRouter: openai/whisper-large-v3-turbo; OpenAI direct: whisper-1 */
+export const getSttModel = (): string =>
+  process.env.REMIX_STT_MODEL?.trim() || "openai/whisper-large-v3-turbo";
+
+/** Duration-based STT pricing (USD per minute). Turbo ≈ $0.04/hr on OpenRouter/Groq. */
+export const getSttCostPerMinuteUsd = (): number => {
+  const configured = Number(process.env.REMIX_STT_COST_PER_MINUTE_USD);
+  if (Number.isFinite(configured) && configured >= 0) {
+    return configured;
+  }
+
+  const model = getSttModel().toLowerCase();
+  if (model.includes("whisper-large-v3-turbo") || model.includes("distil-whisper")) {
+    return 0.04 / 60;
+  }
+  if (model.includes("gpt-4o-mini-transcribe")) {
+    return 0.003;
+  }
+  if (model.includes("gpt-4o-transcribe")) {
+    return 0.006;
+  }
+  return 0.006;
+};
+
 export const getSttApiBaseUrl = (): string => {
   const dedicated = process.env.REMIX_STT_API_URL?.trim();
   if (dedicated) {

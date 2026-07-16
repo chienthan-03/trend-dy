@@ -341,8 +341,8 @@ export class RemixProcessor extends WorkerHost {
     await this.prisma.usageEvent.create({
       data: {
         jobId,
-        provider: "openai", // or from stt config
-        model: "whisper-1",
+        provider: transcript.provider,
+        model: transcript.model,
         costUsd: sttCostUsd,
       },
     });
