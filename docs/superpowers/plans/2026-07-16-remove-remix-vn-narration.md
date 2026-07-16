@@ -61,6 +61,8 @@ export type RemixPackageV1 = {
   subtitles: {
     format: "srt";
     cues: Array<{ start: string; end: string; text: string }>;
+    /** Present on full-script (v2) packages; omit in caption mode. */
+    timing_source?: "estimated" | "stt";
   };
   transform_notes: {
     source_language: string;
@@ -77,7 +79,7 @@ export type RemixPolicyChecklist = {
 };
 ```
 
-Keep `RemixSubtitlesV2` as today (`RemixPackageV1["subtitles"] & { timing_source: ... }`).
+Keep `RemixSubtitlesV2` as `RemixPackageV1["subtitles"] & { timing_source: "estimated" | "stt" }` (required for v2 consumers).
 
 - [ ] **Step 2: Update `remix-policy.ts`**
 
