@@ -33,7 +33,6 @@ This checklist provides a set of manual verification steps to ensure the Phase B
 
 3. **Verify Data Persistence**:
    - [ ] Check that "Transcript gốc (STT)" panel appears and contains segments with timestamps.
-   - [ ] Verify that the generated narration is significantly longer than the caption-only mode (typically > 200 characters for a 1-minute video).
    - [ ] Confirm "Phụ đề (timing từ STT)" hint appears in the editor.
 
 4. **Approve and Export**:
@@ -44,12 +43,15 @@ This checklist provides a set of manual verification steps to ensure the Phase B
    - [ ] Verify the ZIP contains:
      - `transcript-source.srt`: Timed segments from STT.
      - `transcript-source.txt`: Full text from STT.
-     - `script-full.txt`: The complete narration script.
+     - `transcript-vi.txt`: Vietnamese translation (when translate step ran).
      - `package.srt`: The generated subtitles.
+     - Banner images and title assets from the packaging step.
+   - [ ] Confirm the ZIP does **not** contain `script.txt` or `hook.txt`.
 
 5. **Spot-Check (Manual)**:
    - [ ] Compare the last few segments of `transcript-source.srt` with the end of the original video to ensure full coverage.
-   - [ ] Verify that the Vietnamese narration accurately recaps the content described in the transcript.
+   - [ ] Open `package.srt` and spot-check subtitle timing against the video.
+   - [ ] If `transcript-vi.txt` is present, confirm it matches the translated transcript shown in the editor.
 
 ## Cost & Performance Monitoring
 
