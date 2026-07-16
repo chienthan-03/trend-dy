@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import type { RemixPackageV1, RemixTranscriptV1 } from "@factory/shared";
-import { buildSrtFromSegments } from "@factory/shared";
+import { buildSrtFromSegments, toSlimRemixPackage } from "@factory/shared";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaService } from "../../prisma/prisma.service";
@@ -13,16 +13,6 @@ import { RemixPolicyGuard } from "./remix-policy.guard";
 
 const samplePackage = (): RemixPackageV1 => ({
   locale: "vi",
-  script: {
-    narration: "Đây là script tiếng Việt.",
-    duration_estimate_sec: 45,
-    sections: [{ label: "Mở đầu", text: "Đây là script tiếng Việt." }],
-  },
-  hook_3s: {
-    spoken: "Bạn có biết điều này?",
-    on_screen: "SHOCK",
-    visual_hint: "close-up",
-  },
   banners: { top: "TOP", bottom: "BOTTOM", watermark: "STUDIO ALPHA" },
   packaging: {
     titles: ["Tiêu đề A", "Tiêu đề B"],
@@ -51,6 +41,20 @@ const samplePackage = (): RemixPackageV1 => ({
   },
 });
 
+const legacyPackageWithScript = () => ({
+  ...samplePackage(),
+  script: {
+    narration: "Đây là script tiếng Việt.",
+    duration_estimate_sec: 45,
+    sections: [{ label: "Mở đầu", text: "Đây là script tiếng Việt." }],
+  },
+  hook_3s: {
+    spoken: "Bạn có biết điều này?",
+    on_screen: "SHOCK",
+    visual_hint: "close-up",
+  },
+});
+
 const sampleTranscript = (): RemixTranscriptV1 => ({
   version: 1,
   language: "zh",
@@ -64,9 +68,20 @@ const sampleTranscript = (): RemixTranscriptV1 => ({
   model: "whisper-1",
 });
 
+const sampleTranslatedTranscript = (): RemixTranscriptV1 => ({
+  version: 1,
+  language: "vi",
+  durationSec: 8,
+  segments: [
+    { startSec: 0, endSec: 3, text: "Câu đầu tiên" },
+    { startSec: 3, endSec: 8, text: "Câu thứ hai" },
+  ],
+  fullText: "Câu đầu tiên Câu thứ hai",
+  provider: "openai",
+  model: "gpt-4o-mini",
+});
+
 const completeChecklist = () => ({
-  scriptRewritten: true,
-  hookIsNew: true,
   hasStudioBrand: true,
   voiceWillBeRerecorded: true,
   noFullReupload: true,
@@ -151,7 +166,7 @@ describe("RemixExportService", () => {
       );
     });
 
-    it("builds zip with script-full.txt, script.txt, hook.txt, package.srt, titles.txt, package.json", async () => {
+    it("builds slim zip with package.srt, titles.txt, banners.txt, description.txt, package.json", async () => {
       const pkg = samplePackage();
       prisma.viralRemake.findUnique.mockResolvedValue({
         id: "remake_1",
@@ -165,33 +180,52 @@ describe("RemixExportService", () => {
       const zip = await JSZip.loadAsync(zipBuffer);
 
       const expectedFiles = [
-        "script-full.txt",
-        "script.txt",
-        "hook.txt",
         "package.srt",
         "titles.txt",
+        "banners.txt",
+        "description.txt",
         "package.json",
       ];
       expect(Object.keys(zip.files).sort()).toEqual(expectedFiles.sort());
 
-      expect(await zip.file("script.txt")!.async("string")).toBe(
-        pkg.script.narration,
-      );
-      expect(await zip.file("script-full.txt")!.async("string")).toBe(
-        pkg.script.narration,
-      );
-      expect(await zip.file("hook.txt")!.async("string")).toBe(
-        pkg.hook_3s.spoken,
-      );
+      expect(zip.file("script.txt")).toBeNull();
+      expect(zip.file("script-full.txt")).toBeNull();
+      expect(zip.file("hook.txt")).toBeNull();
+
       expect(await zip.file("titles.txt")!.async("string")).toBe(
         "Tiêu đề A\nTiêu đề B",
+      );
+      expect(await zip.file("banners.txt")!.async("string")).toBe(
+        "top: TOP\nbottom: BOTTOM\nwatermark: STUDIO ALPHA",
+      );
+      expect(await zip.file("description.txt")!.async("string")).toBe(
+        "Mô tả video\n\n#viral",
       );
       expect(await zip.file("package.srt")!.async("string")).toBe(
         service.buildSrtFromCues(pkg.subtitles.cues),
       );
       expect(JSON.parse(await zip.file("package.json")!.async("string"))).toEqual(
-        pkg,
+        toSlimRemixPackage(pkg),
       );
+    });
+
+    it("strips legacy script and hook_3s from package.json even when DB raw object includes them", async () => {
+      const rawPkg = legacyPackageWithScript();
+      prisma.viralRemake.findUnique.mockResolvedValue({
+        id: "remake_1",
+        usagePolicy: "approved_for_export",
+        policyChecklist: completeChecklist(),
+        packageJson: rawPkg,
+      });
+
+      const { stream } = await service.exportRemake("remake_1");
+      const zipBuffer = await collectStream(stream);
+      const zip = await JSZip.loadAsync(zipBuffer);
+
+      const parsed = JSON.parse(await zip.file("package.json")!.async("string"));
+      expect(parsed).toEqual(toSlimRemixPackage(rawPkg));
+      expect(parsed).not.toHaveProperty("script");
+      expect(parsed).not.toHaveProperty("hook_3s");
     });
 
     it("includes transcript-source files when sourceTranscript is present", async () => {
@@ -211,6 +245,8 @@ describe("RemixExportService", () => {
 
       expect(zip.file("transcript-source.txt")).not.toBeNull();
       expect(zip.file("transcript-source.srt")).not.toBeNull();
+      expect(zip.file("transcript-vi.txt")).toBeNull();
+      expect(zip.file("transcript-vi.srt")).toBeNull();
 
       expect(await zip.file("transcript-source.txt")!.async("string")).toBe(
         transcript.fullText,
@@ -220,6 +256,37 @@ describe("RemixExportService", () => {
       expect(srt).toBe(buildSrtFromSegments(transcript.segments));
       expect(srt.split("\n\n").filter(Boolean)).toHaveLength(
         transcript.segments.length,
+      );
+    });
+
+    it("includes transcript-vi files when sourceTranscriptTranslated is present", async () => {
+      const pkg = samplePackage();
+      const transcript = sampleTranscript();
+      const translated = sampleTranslatedTranscript();
+      prisma.viralRemake.findUnique.mockResolvedValue({
+        id: "remake_1",
+        usagePolicy: "approved_for_export",
+        policyChecklist: completeChecklist(),
+        packageJson: pkg,
+        sourceTranscript: transcript,
+        sourceTranscriptTranslated: translated,
+      });
+
+      const { stream } = await service.exportRemake("remake_1");
+      const zipBuffer = await collectStream(stream);
+      const zip = await JSZip.loadAsync(zipBuffer);
+
+      expect(zip.file("transcript-vi.txt")).not.toBeNull();
+      expect(zip.file("transcript-vi.srt")).not.toBeNull();
+
+      expect(await zip.file("transcript-vi.txt")!.async("string")).toBe(
+        translated.fullText,
+      );
+
+      const srt = await zip.file("transcript-vi.srt")!.async("string");
+      expect(srt).toBe(buildSrtFromSegments(translated.segments));
+      expect(srt.split("\n\n").filter(Boolean)).toHaveLength(
+        translated.segments.length,
       );
     });
   });

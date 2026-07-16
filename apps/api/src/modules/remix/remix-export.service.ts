@@ -8,6 +8,7 @@ import {
   buildSrtFromSegments,
   type RemixPackageV1,
   type RemixTranscriptV1,
+  toSlimRemixPackage,
 } from "@factory/shared";
 import { ZipArchive } from "archiver";
 import { PassThrough } from "node:stream";
@@ -61,7 +62,9 @@ export class RemixExportService {
 
     const pkg = remake.packageJson as RemixPackageV1;
     const transcript = remake.sourceTranscript as RemixTranscriptV1 | null;
-    const stream = this.createZipStream(pkg, transcript);
+    const translated =
+      (remake.sourceTranscriptTranslated as RemixTranscriptV1 | null) ?? null;
+    const stream = this.createZipStream(pkg, transcript, translated);
 
     return {
       stream,
@@ -72,6 +75,7 @@ export class RemixExportService {
   private createZipStream(
     pkg: RemixPackageV1,
     transcript: RemixTranscriptV1 | null,
+    translated?: RemixTranscriptV1 | null,
   ): PassThrough {
     const archive = new ZipArchive({ zlib: { level: 9 } });
     const passthrough = new PassThrough();
@@ -82,6 +86,8 @@ export class RemixExportService {
 
     archive.pipe(passthrough);
 
+    const slim = toSlimRemixPackage(pkg);
+
     if (transcript) {
       archive.append(transcript.fullText, { name: "transcript-source.txt" });
       archive.append(buildSrtFromSegments(transcript.segments), {
@@ -89,14 +95,32 @@ export class RemixExportService {
       });
     }
 
-    archive.append(pkg.script.narration, { name: "script-full.txt" });
-    archive.append(pkg.script.narration, { name: "script.txt" });
-    archive.append(pkg.hook_3s.spoken, { name: "hook.txt" });
-    archive.append(this.buildSrtFromCues(pkg.subtitles.cues), {
+    if (translated) {
+      archive.append(translated.fullText, { name: "transcript-vi.txt" });
+      archive.append(buildSrtFromSegments(translated.segments), {
+        name: "transcript-vi.srt",
+      });
+    }
+
+    archive.append(this.buildSrtFromCues(slim.subtitles.cues), {
       name: "package.srt",
     });
-    archive.append(pkg.packaging.titles.join("\n"), { name: "titles.txt" });
-    archive.append(JSON.stringify(pkg, null, 2), { name: "package.json" });
+    archive.append(slim.packaging.titles.join("\n"), { name: "titles.txt" });
+    archive.append(
+      [
+        `top: ${slim.banners.top}`,
+        `bottom: ${slim.banners.bottom}`,
+        `watermark: ${slim.banners.watermark}`,
+      ].join("\n"),
+      { name: "banners.txt" },
+    );
+    archive.append(
+      [slim.packaging.description, "", slim.packaging.hashtags.join(" ")].join(
+        "\n",
+      ),
+      { name: "description.txt" },
+    );
+    archive.append(JSON.stringify(slim, null, 2), { name: "package.json" });
 
     void archive.finalize();
 
