@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getSttAudioBitrateKbps } from "./remix-config";
+import { getSttAudioBitrateKbps, getTtsMode } from "./remix-config";
 
 export type SttAudioExtract = {
   buffer: Buffer;
@@ -62,6 +62,148 @@ export const runFfmpeg = (ffmpegPath: string, args: string[]): Promise<void> =>
   });
 
 const getFfmpegPath = (): string => process.env.FFMPEG_PATH ?? "ffmpeg";
+const getFfprobePath = (): string => process.env.FFPROBE_PATH ?? "ffprobe";
+
+const MINIMAL_MP3 = Buffer.from([
+  0xff, 0xfb, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+]);
+
+export const probeAudioDurationSec = async (
+  buffer: Buffer,
+  inputExt = "audio",
+): Promise<number | null> => {
+  const ffprobe = getFfprobePath();
+  const dir = await mkdtemp(join(tmpdir(), "remix-audio-probe-"));
+  const inputPath = join(dir, `input.${inputExt}`);
+
+  try {
+    await writeFile(inputPath, buffer);
+    const durationSec = await new Promise<number | null>((resolve) => {
+      const proc = spawn(
+        ffprobe,
+        [
+          "-v",
+          "error",
+          "-show_entries",
+          "format=duration",
+          "-of",
+          "csv=p=0",
+          inputPath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+
+      let stdout = "";
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      proc.on("error", () => resolve(null));
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          resolve(null);
+          return;
+        }
+
+        const parsed = Number(stdout.trim());
+        resolve(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+      });
+    });
+
+    return durationSec;
+  } catch {
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+/** Convert WAV (or other non-MP3 audio) to MP3 for dub storage. */
+export const convertWavToMp3 = async (wavBuffer: Buffer): Promise<Buffer> => {
+  if (getTtsMode() === "fake") {
+    try {
+      return await convertWavToMp3WithFfmpeg(wavBuffer);
+    } catch {
+      return MINIMAL_MP3;
+    }
+  }
+
+  return convertWavToMp3WithFfmpeg(wavBuffer);
+};
+
+const convertWavToMp3WithFfmpeg = async (wavBuffer: Buffer): Promise<Buffer> => {
+  const ffmpeg = getFfmpegPath();
+  const dir = await mkdtemp(join(tmpdir(), "remix-dub-wav-"));
+  const inputPath = join(dir, "input.wav");
+  const outputPath = join(dir, "output.mp3");
+
+  try {
+    await writeFile(inputPath, wavBuffer);
+    await runFfmpeg(ffmpeg, [
+      "-y",
+      "-i",
+      inputPath,
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      "-f",
+      "mp3",
+      outputPath,
+    ]);
+    return await readFile(outputPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+/** Convert container audio (m4a/mp4) to MP3 for dub storage. */
+export const convertContainerAudioToMp3 = async (
+  audioBuffer: Buffer,
+  inputExt: "m4a" | "mp4",
+): Promise<Buffer> => {
+  if (getTtsMode() === "fake") {
+    try {
+      return await convertContainerAudioToMp3WithFfmpeg(audioBuffer, inputExt);
+    } catch {
+      return MINIMAL_MP3;
+    }
+  }
+
+  return convertContainerAudioToMp3WithFfmpeg(audioBuffer, inputExt);
+};
+
+const convertContainerAudioToMp3WithFfmpeg = async (
+  audioBuffer: Buffer,
+  inputExt: "m4a" | "mp4",
+): Promise<Buffer> => {
+  const ffmpeg = getFfmpegPath();
+  const dir = await mkdtemp(join(tmpdir(), "remix-dub-container-"));
+  const inputPath = join(dir, `input.${inputExt}`);
+  const outputPath = join(dir, "output.mp3");
+
+  try {
+    await writeFile(inputPath, audioBuffer);
+    await runFfmpeg(ffmpeg, [
+      "-y",
+      "-i",
+      inputPath,
+      "-vn",
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      "-f",
+      "mp3",
+      outputPath,
+    ]);
+    return await readFile(outputPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
 
 /** Mono MP3 tuned for speech STT — much smaller than 16 kHz WAV. */
 export const extractAudioForStt = async (

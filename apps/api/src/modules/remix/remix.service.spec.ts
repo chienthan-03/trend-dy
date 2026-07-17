@@ -7,7 +7,12 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobsService } from "../jobs/jobs.service";
 import type { PrismaService } from "../../prisma/prisma.service";
+import type { RemixStorageService } from "./remix-storage.service";
 import { RemixService } from "./remix.service";
+
+const createRemixStorageMock = () => ({
+  putDub: vi.fn().mockResolvedValue("remix/remake_1/dub-audio.mp3"),
+});
 
 describe("RemixService.triggerRemix", () => {
   let prisma: {
@@ -19,6 +24,7 @@ describe("RemixService.triggerRemix", () => {
     };
   };
   let jobsService: { enqueue: ReturnType<typeof vi.fn> };
+  let remixStorage: ReturnType<typeof createRemixStorageMock>;
   let service: RemixService;
   let previousRemixEnabled: string | undefined;
 
@@ -40,6 +46,7 @@ describe("RemixService.triggerRemix", () => {
     service = new RemixService(
       prisma as unknown as PrismaService,
       jobsService as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
     );
   });
 
@@ -164,6 +171,7 @@ describe("RemixService.computePolicyWarnings", () => {
     service = new RemixService(
       {} as PrismaService,
       { enqueue: vi.fn() } as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
     );
   });
 
@@ -195,6 +203,7 @@ describe("RemixService.regenerate", () => {
     };
   };
   let jobsService: { enqueue: ReturnType<typeof vi.fn> };
+  let remixStorage: ReturnType<typeof createRemixStorageMock>;
   let service: RemixService;
   let previousRemixEnabled: string | undefined;
 
@@ -214,6 +223,7 @@ describe("RemixService.regenerate", () => {
     service = new RemixService(
       prisma as unknown as PrismaService,
       jobsService as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
     );
   });
 
@@ -345,6 +355,7 @@ describe("RemixService.retranscribe", () => {
     };
   };
   let jobsService: { enqueue: ReturnType<typeof vi.fn> };
+  let remixStorage: ReturnType<typeof createRemixStorageMock>;
   let service: RemixService;
   let previousRemixEnabled: string | undefined;
 
@@ -364,6 +375,7 @@ describe("RemixService.retranscribe", () => {
     service = new RemixService(
       prisma as unknown as PrismaService,
       jobsService as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
     );
   });
 
@@ -421,6 +433,7 @@ describe("RemixService.enqueueTts", () => {
     };
   };
   let jobsService: { enqueue: ReturnType<typeof vi.fn> };
+  let remixStorage: ReturnType<typeof createRemixStorageMock>;
   let service: RemixService;
 
   beforeEach(() => {
@@ -436,6 +449,7 @@ describe("RemixService.enqueueTts", () => {
     service = new RemixService(
       prisma as unknown as PrismaService,
       jobsService as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
     );
   });
 
@@ -493,6 +507,88 @@ describe("RemixService.enqueueTts", () => {
   });
 });
 
+describe("RemixService.uploadDubAudio", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let remixStorage: ReturnType<typeof createRemixStorageMock>;
+  let service: RemixService;
+
+  beforeEach(() => {
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    remixStorage = createRemixStorageMock();
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      { enqueue: vi.fn() } as unknown as JobsService,
+      remixStorage as unknown as RemixStorageService,
+    );
+  });
+
+  it("stores uploaded dub audio and sets dubSource=upload with renderPhase=tts_ready", async () => {
+    const mp3Buffer = Buffer.from("fake-mp3-audio");
+
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      videoDurationSec: 60,
+    });
+
+    const result = await service.uploadDubAudio("remake_1", {
+      buffer: mp3Buffer,
+      mimetype: "audio/mpeg",
+      size: mp3Buffer.length,
+    });
+
+    expect(remixStorage.putDub).toHaveBeenCalledWith(
+      "remake_1",
+      mp3Buffer,
+      "audio/mpeg",
+    );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+        dubSource: "upload",
+        renderPhase: "tts_ready",
+        ttsFitFailedIndexes: [],
+        renderOutputKey: null,
+        renderError: null,
+      },
+    });
+    expect(result).toEqual({
+      remakeId: "remake_1",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      dubSource: "upload",
+      renderPhase: "tts_ready",
+      durationMismatch: false,
+    });
+  });
+
+  it("throws BadRequestException for unsupported mime types", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      videoDurationSec: 60,
+    });
+
+    await expect(
+      service.uploadDubAudio("remake_1", {
+        buffer: Buffer.from("data"),
+        mimetype: "video/mp4",
+        size: 4,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(remixStorage.putDub).not.toHaveBeenCalled();
+  });
+});
+
 describe("RemixService.updateRemake", () => {
   let prisma: {
     viralRemake: {
@@ -512,6 +608,7 @@ describe("RemixService.updateRemake", () => {
     service = new RemixService(
       prisma as unknown as PrismaService,
       { enqueue: vi.fn() } as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
     );
   });
 

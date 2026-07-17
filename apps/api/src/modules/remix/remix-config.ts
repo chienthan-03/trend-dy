@@ -85,6 +85,11 @@ export const getTtsCostPer1kCharsUsd = (): number => {
 export const getDefaultTtsVoiceId = (): string =>
   process.env.REMIX_TTS_VOICE?.trim() || "alloy";
 
+export const getDubMaxUploadMb = (): number => {
+  const n = Number(process.env.REMIX_DUB_MAX_UPLOAD_MB ?? "30");
+  return Number.isFinite(n) && n > 0 ? n : 30;
+};
+
 /** OpenRouter: openai/whisper-large-v3-turbo; OpenAI direct: whisper-1 */
 export const getSttModel = (): string =>
   process.env.REMIX_STT_MODEL?.trim() || "openai/whisper-large-v3-turbo";

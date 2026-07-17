@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -9,14 +10,19 @@ import {
   Query,
   Req,
   StreamableFile,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { memoryStorage } from "multer";
 import {
   SessionAuthGuard,
   type RequestWithUser,
 } from "../auth/session-auth.guard";
 import { TriggerRemixDto } from "./dto/trigger-remix.dto";
 import { UpdateRemixDto } from "./dto/update-remix.dto";
+import { getDubMaxUploadMb } from "./remix-config";
 import { RemixExportService } from "./remix-export.service";
 import { RemixService } from "./remix.service";
 
@@ -87,6 +93,28 @@ export class RemixController {
     @Body() body: { voiceId?: string } = {},
   ) {
     return this.remixService.enqueueTts(id, { voiceId: body?.voiceId });
+  }
+
+  @Post(":id/dub-audio")
+  @UseInterceptors(
+    FileInterceptor("file", {
+      storage: memoryStorage(),
+      limits: { fileSize: getDubMaxUploadMb() * 1024 * 1024 },
+    }),
+  )
+  uploadDubAudio(
+    @Param("id") id: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new BadRequestException("Multipart field 'file' is required");
+    }
+
+    return this.remixService.uploadDubAudio(id, {
+      buffer: file.buffer,
+      mimetype: file.mimetype,
+      size: file.size,
+    });
   }
 
   @Get(":id/transcript")

@@ -10,7 +10,13 @@ import type { RemixPackageV1, RemixTranscriptV1 } from "@factory/shared";
 import { PrismaService } from "../../prisma/prisma.service";
 import { JobsService } from "../jobs/jobs.service";
 import type { UpdateRemixDto } from "./dto/update-remix.dto";
-import { assertFullScriptAllowed, getRemixScriptMode } from "./remix-config";
+import {
+  convertContainerAudioToMp3,
+  convertWavToMp3,
+  probeAudioDurationSec,
+} from "./remix-audio.util";
+import { assertFullScriptAllowed, getDubMaxUploadMb, getRemixScriptMode } from "./remix-config";
+import { RemixStorageService } from "./remix-storage.service";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "./translate-config";
 
 export type TriggerRemixInput = {
@@ -35,6 +41,29 @@ export type PolicyWarningInput = {
   packageJson: unknown;
 };
 
+export type UploadDubAudioInput = {
+  buffer: Buffer;
+  mimetype: string;
+  size: number;
+};
+
+export type UploadDubAudioResult = {
+  remakeId: string;
+  mediaDubAudioKey: string;
+  dubSource: "upload";
+  renderPhase: "tts_ready";
+  durationMismatch: boolean;
+};
+
+const ALLOWED_DUB_MIME_TYPES = new Set([
+  "audio/mpeg",
+  "audio/wav",
+  "audio/mp4",
+  "audio/x-m4a",
+]);
+
+const DURATION_MISMATCH_THRESHOLD = 0.1;
+
 const PENDING_EXTERNAL_VIDEO_ID = "pending";
 
 export const isRemixEnabled = (): boolean => {
@@ -47,6 +76,7 @@ export class RemixService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobsService: JobsService,
+    private readonly remixStorage: RemixStorageService,
   ) {}
 
   async triggerRemix(input: TriggerRemixInput): Promise<TriggerRemixResult> {
@@ -175,6 +205,71 @@ export class RemixService {
     });
 
     return { remakeId: remake.id, jobId: job.jobId };
+  }
+
+  async uploadDubAudio(
+    id: string,
+    input: UploadDubAudioInput,
+  ): Promise<UploadDubAudioResult> {
+    const remake = await this.getRemake(id);
+    const mimetype = input.mimetype?.trim().toLowerCase();
+
+    if (!ALLOWED_DUB_MIME_TYPES.has(mimetype)) {
+      throw new BadRequestException(
+        "Dub upload must be audio/mpeg, audio/wav, audio/mp4, or audio/x-m4a",
+      );
+    }
+
+    const maxBytes = getDubMaxUploadMb() * 1024 * 1024;
+    if (input.size > maxBytes) {
+      throw new BadRequestException(
+        `Dub upload exceeds ${getDubMaxUploadMb()} MB limit`,
+      );
+    }
+
+    const mp3Buffer = await this.prepareDubMp3Buffer(input.buffer, mimetype);
+    const mediaDubAudioKey = await this.remixStorage.putDub(
+      remake.id,
+      mp3Buffer,
+      "audio/mpeg",
+    );
+
+    const probeExt =
+      mimetype === "audio/wav"
+        ? "wav"
+        : mimetype === "audio/x-m4a"
+          ? "m4a"
+          : mimetype === "audio/mp4"
+            ? "mp4"
+            : "mp3";
+    const uploadDurationSec = await probeAudioDurationSec(
+      input.buffer,
+      probeExt,
+    );
+    const durationMismatch = this.isDubDurationMismatch(
+      uploadDurationSec,
+      remake.videoDurationSec,
+    );
+
+    await this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: {
+        mediaDubAudioKey,
+        dubSource: "upload",
+        renderPhase: "tts_ready",
+        ttsFitFailedIndexes: [],
+        renderOutputKey: null,
+        renderError: null,
+      },
+    });
+
+    return {
+      remakeId: remake.id,
+      mediaDubAudioKey,
+      dubSource: "upload",
+      renderPhase: "tts_ready",
+      durationMismatch,
+    };
   }
 
   async regenerate(id: string): Promise<TriggerRemixResult> {
@@ -326,6 +421,42 @@ export class RemixService {
 
   computePolicyWarnings(_input: PolicyWarningInput): string[] {
     return [];
+  }
+
+  private isDubDurationMismatch(
+    uploadDurationSec: number | null,
+    videoDurationSec: number | null,
+  ): boolean {
+    if (
+      uploadDurationSec === null ||
+      videoDurationSec === null ||
+      videoDurationSec <= 0
+    ) {
+      return false;
+    }
+
+    const relativeDiff =
+      Math.abs(uploadDurationSec - videoDurationSec) / videoDurationSec;
+    return relativeDiff > DURATION_MISMATCH_THRESHOLD;
+  }
+
+  private async prepareDubMp3Buffer(
+    buffer: Buffer,
+    mimetype: string,
+  ): Promise<Buffer> {
+    if (mimetype === "audio/mpeg") {
+      return buffer;
+    }
+
+    if (mimetype === "audio/wav") {
+      return convertWavToMp3(buffer);
+    }
+
+    if (mimetype === "audio/x-m4a") {
+      return convertContainerAudioToMp3(buffer, "m4a");
+    }
+
+    return convertContainerAudioToMp3(buffer, "mp4");
   }
 
   private async triggerFromViralItem(
