@@ -13,5 +13,10 @@ coverage/
 prisma/*.db
 generated/
 .data/
-backups/
+# Track SQL dumps so home/office can sync via git. Binary dumps stay local.
+backups/*.dump
+backups/pre-merge-*.sql
 vendor/redis-7/
+
+# Brainstorm / local agent artifacts
+.superpowers/
