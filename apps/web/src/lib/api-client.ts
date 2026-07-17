@@ -1,6 +1,9 @@
 import type {
+  RemixBannerJson,
+  RemixDubSource,
   RemixPackageV1,
-  RemixPolicyChecklist,
+  RemixRenderMode,
+  RemixRenderPhase,
   RemixTranscriptV1,
 } from "@factory/shared";
 
@@ -136,7 +139,6 @@ export type ViralRemake = {
   videoDurationSec: number | null;
   usagePolicy: string;
   packageJson: RemixPackageV1 | null;
-  policyChecklist: RemixPolicyChecklist | null;
   policyWarnings: string[];
   editorNotes: string | null;
   approvedByUserId: string | null;
@@ -146,11 +148,29 @@ export type ViralRemake = {
   costUsd: number | null;
   createdAt: string;
   updatedAt: string;
+  mediaVideoKey: string | null;
+  mediaDubAudioKey: string | null;
+  dubSource: RemixDubSource | null;
+  renderMode: RemixRenderMode;
+  renderPhase: RemixRenderPhase;
+  renderError: string | null;
+  renderOutputKey: string | null;
+  bannerJson: RemixBannerJson | null;
+  ttsVoiceId: string | null;
+  ttsFitFailedIndexes: number[];
 };
 
 export type RemixTriggerResult = {
   remakeId: string;
   jobId: string;
+};
+
+export type RemixUploadDubAudioResult = {
+  remakeId: string;
+  mediaDubAudioKey: string;
+  dubSource: "upload";
+  renderPhase: "tts_ready";
+  durationMismatch: boolean;
 };
 
 export type RemixTranscriptResponse = {
@@ -348,8 +368,10 @@ export const api = {
       id: string,
       body: {
         packageJson?: RemixPackageV1;
-        policyChecklist?: RemixPolicyChecklist;
         editorNotes?: string;
+        renderMode?: RemixRenderMode;
+        ttsVoiceId?: string;
+        bannerJson?: RemixBannerJson;
       },
     ) =>
       apiFetch<ViralRemake>(`/viral/remix/${id}`, {
@@ -378,6 +400,29 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ projectId }),
       }),
+    generateBanners: (id: string) =>
+      apiFetch<RemixBannerJson>(`/viral/remix/${id}/banners/generate`, {
+        method: "POST",
+      }),
+    enqueueTts: (id: string, body?: { voiceId?: string }) =>
+      apiFetch<RemixTriggerResult>(`/viral/remix/${id}/tts`, {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+      }),
+    uploadDubAudio: (id: string, file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      return apiFetch<RemixUploadDubAudioResult>(
+        `/viral/remix/${id}/dub-audio`,
+        { method: "POST", body: form },
+      );
+    },
+    enqueueRender: (id: string) =>
+      apiFetch<RemixTriggerResult>(`/viral/remix/${id}/render`, {
+        method: "POST",
+      }),
+    getRenderUrl: (id: string, options?: { download?: boolean }) =>
+      `${API_BASE}/viral/remix/${id}/render${options?.download ? "?download=1" : ""}`,
   },
   stories: {
     list: (projectId?: string) =>

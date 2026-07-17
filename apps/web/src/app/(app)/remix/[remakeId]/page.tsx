@@ -1,22 +1,19 @@
 "use client";
 
-import {
-  defaultRemixPolicyChecklist,
-  isPolicyChecklistComplete,
-  type RemixPackageV1,
-  type RemixPipelinePhase,
-  type RemixPolicyChecklist,
-  type RemixScriptMode,
-  type RemixTranscriptV1,
+import type {
+  RemixPackageV1,
+  RemixPipelinePhase,
+  RemixScriptMode,
+  RemixTranscriptV1,
 } from "@factory/shared";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PipelineStatusBadge } from "@/components/remix/pipeline-status-badge";
-import { PolicyChecklist } from "@/components/remix/policy-checklist";
 import { RemakeEditor } from "@/components/remix/remake-editor";
 import { RemakeSourcePanel } from "@/components/remix/remake-source-panel";
 import { RemakeTranscriptPanel } from "@/components/remix/remake-transcript-panel";
+import { VideoOutputPanel } from "@/components/remix/video-output-panel";
 import {
   Alert,
   Badge,
@@ -46,9 +43,6 @@ const RemakeStudioPage = () => {
   const [translatedTranscript, setTranslatedTranscript] =
     useState<RemixTranscriptV1 | null>(null);
   const [packageJson, setPackageJson] = useState<RemixPackageV1 | null>(null);
-  const [policyChecklist, setPolicyChecklist] = useState<RemixPolicyChecklist>(
-    defaultRemixPolicyChecklist(),
-  );
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -82,9 +76,6 @@ const RemakeStudioPage = () => {
         } else if (isProcessingStatus(data.status)) {
           setPackageJson(null);
         }
-        setPolicyChecklist(
-          data.policyChecklist ?? defaultRemixPolicyChecklist(),
-        );
         if (isProcessingStatus(data.status)) {
           dirtyRef.current = false;
         }
@@ -100,7 +91,9 @@ const RemakeStudioPage = () => {
 
   const processing = remake
     ? isProcessingStatus(remake.status) ||
-      (remake.pipelinePhase !== "ready" && remake.pipelinePhase !== "failed")
+      (remake.pipelinePhase !== "ready" && remake.pipelinePhase !== "failed") ||
+      remake.renderPhase === "tts" ||
+      remake.renderPhase === "rendering"
     : false;
 
   useEffect(() => {
@@ -119,13 +112,9 @@ const RemakeStudioPage = () => {
     try {
       const updated = await api.remix.update(remakeId, {
         packageJson,
-        policyChecklist,
       });
       setRemake(updated);
       if (updated.packageJson) setPackageJson(updated.packageJson);
-      setPolicyChecklist(
-        updated.policyChecklist ?? defaultRemixPolicyChecklist(),
-      );
       dirtyRef.current = false;
       setInfo("Changes saved.");
     } catch (err) {
@@ -136,24 +125,16 @@ const RemakeStudioPage = () => {
   };
 
   const handleApprove = async () => {
-    if (!isPolicyChecklistComplete(policyChecklist)) {
-      setError("Complete the policy checklist before approving for export.");
-      return;
-    }
     setPending("approve");
     setError(null);
     setInfo(null);
     try {
-      // Approve reads checklist from DB — persist local checklist first.
-      const saved = await api.remix.update(remakeId, {
-        ...(packageJson ? { packageJson } : {}),
-        policyChecklist,
-      });
-      setRemake(saved);
-      setPolicyChecklist(
-        saved.policyChecklist ?? defaultRemixPolicyChecklist(),
-      );
-      dirtyRef.current = false;
+      if (packageJson && dirtyRef.current) {
+        const saved = await api.remix.update(remakeId, { packageJson });
+        setRemake(saved);
+        if (saved.packageJson) setPackageJson(saved.packageJson);
+        dirtyRef.current = false;
+      }
 
       const updated = await api.remix.approve(remakeId);
       setRemake(updated);
@@ -224,7 +205,6 @@ const RemakeStudioPage = () => {
   const canEdit =
     remake?.status === "ready" && remake.usagePolicy !== "approved_for_export";
   const canExport = remake?.usagePolicy === "approved_for_export";
-  const checklistComplete = isPolicyChecklistComplete(policyChecklist);
 
   return (
     <div className="space-y-6">
@@ -310,7 +290,6 @@ const RemakeStudioPage = () => {
                 <RemakeEditor
                   packageJson={packageJson}
                   disabled={!canEdit}
-                  timingSource={remake.scriptMode === "full" ? "stt" : "estimated"}
                   onChange={(next) => {
                     dirtyRef.current = true;
                     setPackageJson(next);
@@ -326,15 +305,13 @@ const RemakeStudioPage = () => {
             )}
           </Card>
 
-          <Card title="Policy checklist">
-            <PolicyChecklist
-              checklist={policyChecklist}
-              warnings={remake.policyWarnings}
-              disabled={!canEdit}
-              onChange={(next) => {
-                dirtyRef.current = true;
-                setPolicyChecklist(next);
-              }}
+          <Card title="Video xuất bản (Dub + Render)">
+            <VideoOutputPanel
+              remake={remake}
+              pipelineReady={remake.pipelinePhase === "ready"}
+              onRemakeChange={(updated) => setRemake(updated)}
+              onError={(message) => setError(message)}
+              onInfo={(message) => setInfo(message)}
             />
           </Card>
 
@@ -350,12 +327,7 @@ const RemakeStudioPage = () => {
               <Button
                 variant="secondary"
                 onClick={handleApprove}
-                disabled={
-                  !canEdit ||
-                  !packageJson ||
-                  !checklistComplete ||
-                  pending === "approve"
-                }
+                disabled={!canEdit || !packageJson || pending === "approve"}
                 aria-label="Approve for export"
               >
                 {pending === "approve" ? "Approving…" : "Approve for export"}
@@ -395,16 +367,6 @@ const RemakeStudioPage = () => {
                 Export ZIP
               </Button>
             </div>
-            {!checklistComplete && canEdit ? (
-              <p className="mt-3 text-xs text-gray-500">
-                Complete all policy checklist items to enable approval.
-              </p>
-            ) : null}
-            {checklistComplete && canEdit ? (
-              <p className="mt-3 text-xs text-gray-500">
-                Checklist is saved automatically when you approve for export.
-              </p>
-            ) : null}
           </Card>
         </>
       )}
