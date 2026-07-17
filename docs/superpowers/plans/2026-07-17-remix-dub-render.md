@@ -560,7 +560,7 @@ git commit -m "feat(web): Remake Studio video output panel for dub/render"
 - Modify: `.env.example`
 - Create: `docs/superpowers/plans/remix-dub-render-smoke-checklist.md`
 
-- [ ] **Step 1: Document env**
+- [x] **Step 1: Document env**
 
 ```env
 REMIX_TTS_MODE=fake
@@ -577,17 +577,17 @@ REMIX_DUB_MAX_UPLOAD_MB=30
 FFMPEG_PATH=ffmpeg
 ```
 
-- [ ] **Step 2: Smoke checklist**
+- [x] **Step 2: Smoke checklist**
 
 Paste link → translate ready → Tạo audio VI → preview audio_only → generate banners → banner_audio render → approve → download MP4 → ZIP still works without MP4.
 
-- [ ] **Step 3: Run full relevant tests**
+- [x] **Step 3: Run full relevant tests**
 
 ```bash
 cd apps/api && pnpm test -- remix
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -m "docs: dub/render env example and smoke checklist"
