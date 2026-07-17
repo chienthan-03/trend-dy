@@ -10,6 +10,7 @@ describe("RemixController render endpoints", () => {
   let remixService: {
     getRemake: ReturnType<typeof vi.fn>;
     enqueueRender: ReturnType<typeof vi.fn>;
+    generateBanners: ReturnType<typeof vi.fn>;
   };
   let remixStorage: { getRender: ReturnType<typeof vi.fn> };
   let remixPolicyGuard: RemixPolicyGuard;
@@ -19,6 +20,9 @@ describe("RemixController render endpoints", () => {
     remixService = {
       getRemake: vi.fn(),
       enqueueRender: vi.fn().mockResolvedValue({ remakeId: "remake_1", jobId: "job_1" }),
+      generateBanners: vi
+        .fn()
+        .mockResolvedValue({ header: "Header", bottom: "Bottom" }),
     };
     remixStorage = {
       getRender: vi.fn().mockResolvedValue(Buffer.from("rendered-mp4")),
@@ -38,6 +42,13 @@ describe("RemixController render endpoints", () => {
 
     expect(remixService.enqueueRender).toHaveBeenCalledWith("remake_1");
     expect(result).toEqual({ remakeId: "remake_1", jobId: "job_1" });
+  });
+
+  it("POST :id/banners/generate delegates to generateBanners", async () => {
+    const result = await controller.generateBanners("remake_1");
+
+    expect(remixService.generateBanners).toHaveBeenCalledWith("remake_1");
+    expect(result).toEqual({ header: "Header", bottom: "Bottom" });
   });
 
   it("GET :id/render streams the render when preview is ready", async () => {

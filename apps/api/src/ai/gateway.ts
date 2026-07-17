@@ -3,6 +3,7 @@ import {
   extractChapterV1Schema,
   type ExtractChapterV1,
 } from "./prompts/extract.chapter.v1";
+import { REMIX_BANNERS_V1_KEY } from "./prompts/remix.banners.v1";
 
 const EMBEDDING_DIMENSIONS = 1536;
 
@@ -153,6 +154,28 @@ const buildFakeChapterExtract = (prompt: string): ExtractChapterV1 => {
   });
 };
 
+const FAKE_BANNER_HEADERS = [
+  "KHÔNG THỂ TIN ĐƯỢC",
+  "BÍ MẬT BỊ PHANH PHUI",
+  "PHẢN ỨNG GÂY SỐC",
+  "SỰ THẬT KHIẾN AI CŨNG BẤT NGỜ",
+] as const;
+
+const FAKE_BANNER_BOTTOMS = [
+  "Theo dõi để xem tiếp",
+  "Xem ngay phần tiếp theo",
+  "Đừng bỏ lỡ diễn biến sau",
+  "Follow để cập nhật tập mới",
+] as const;
+
+const buildFakeRemixBanners = (prompt: string): { header: string; bottom: string } => {
+  const hash = createHash("sha256").update(prompt).digest();
+  return {
+    header: FAKE_BANNER_HEADERS[hash[0]! % FAKE_BANNER_HEADERS.length]!,
+    bottom: FAKE_BANNER_BOTTOMS[hash[1]! % FAKE_BANNER_BOTTOMS.length]!,
+  };
+};
+
 const completeJsonWithOpenAi = async <T>(
   prompt: string,
   schema: JsonSchema<T>,
@@ -244,15 +267,6 @@ const FAKE_VI_BY_TYPE: Record<string, string> = {
   }),
 };
 
-const secToSrtTimestamp = (sec: number): string => {
-  const totalMs = Math.max(0, Math.round(sec * 1000));
-  const hours = Math.floor(totalMs / 3_600_000);
-  const minutes = Math.floor((totalMs % 3_600_000) / 60_000);
-  const seconds = Math.floor((totalMs % 60_000) / 1000);
-  const ms = totalMs % 1000;
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
-};
-
 const parseDurationFromTranscriptPrompt = (prompt: string): number => {
   const match = prompt.match(/Duration:\s*(\d+(?:\.\d+)?)s/);
   if (match?.[1]) {
@@ -264,49 +278,27 @@ const parseDurationFromTranscriptPrompt = (prompt: string): number => {
 const buildFakeRemixGenerateV2 = (prompt: string): string => {
   const durationSec = parseDurationFromTranscriptPrompt(prompt);
 
-  const segmentCountMatch = prompt.match(/Transcript segments \((\d+)\)/);
-  const segmentCount = segmentCountMatch?.[1]
-    ? Number(segmentCountMatch[1])
-    : 4;
-  const cues = Array.from({ length: Math.max(1, segmentCount) }, (_, index) => {
-    const startSec = (durationSec / segmentCount) * index;
-    const endSec = (durationSec / segmentCount) * (index + 1);
-    return {
-      start: secToSrtTimestamp(startSec),
-      end: secToSrtTimestamp(endSec),
-      text: `Đoạn recap ${index + 1}: nội dung được viết lại theo phong cách kể chuyện tiếng Việt.`,
-    };
-  });
-
   return JSON.stringify({
     locale: "vi",
-    banners: {
-      top: "RECAP TU TIÊN",
-      bottom: "Theo dõi để xem tiếp",
-      watermark: "STUDIO ALPHA",
-    },
     packaging: {
       titles: ["Tiêu đề A", "Tiêu đề B", "Tiêu đề C"],
       description: "Recap đầy đủ — theo dõi để không bỏ lỡ!",
       hashtags: ["tu_tien", "recap", "douyin"],
     },
-    subtitles: {
-      format: "srt",
-      timing_source: "stt",
-      cues,
-    },
     transform_notes: {
       input_mode: "transcript_full",
       source_duration_sec: durationSec,
       source_language: "zh",
-      rewrite_strategy: "recap_vn_inspired",
+      rewrite_strategy: "packaging_only",
       risks: [],
     },
   });
 };
 
 const isTranscriptAwareRemixPrompt = (prompt: string): boolean =>
-  prompt.includes("Transcript segments") || prompt.includes('"startSec"');
+  prompt.includes("Transcript excerpt") ||
+  prompt.includes("Transcript segments") ||
+  prompt.includes('"startSec"');
 
 const resolveFakeText = (prompt: string, type: string): string => {
   if (type === "remix_generate" && isTranscriptAwareRemixPrompt(prompt)) {
@@ -400,9 +392,12 @@ export const completeJson = async <T>(
   const tokensIn = Math.ceil(prompt.length / 4);
 
   if (process.env.LLM_MODE === "fake") {
-    const raw = prompt.includes("extract.chapter.v1")
-      ? buildFakeChapterExtract(prompt)
-      : {};
+    let raw: unknown = {};
+    if (prompt.includes("extract.chapter.v1")) {
+      raw = buildFakeChapterExtract(prompt);
+    } else if (prompt.includes(REMIX_BANNERS_V1_KEY)) {
+      raw = buildFakeRemixBanners(prompt);
+    }
     return {
       data: schema.parse(raw),
       model: "fake",

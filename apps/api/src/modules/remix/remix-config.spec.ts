@@ -1,8 +1,10 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
   assertFullScriptAllowed,
+  getLetterboxRatio,
   getMediaDownloadTimeoutMs,
   getRemixScriptMode,
+  getRenderFontPath,
   getSttCostPerMinuteUsd,
   getSttModel,
   getSttResponseFormat,
@@ -66,5 +68,30 @@ describe("remix-config", () => {
   it("reads TTS max speed from env", () => {
     process.env.REMIX_TTS_MAX_SPEED = "1.5";
     expect(getTtsMaxSpeed()).toBe(1.5);
+  });
+
+  it("defaults letterbox ratio to 0.10", () => {
+    delete process.env.REMIX_LETTERBOX_RATIO;
+    expect(getLetterboxRatio()).toBe(0.1);
+  });
+
+  it("reads letterbox ratio from env", () => {
+    process.env.REMIX_LETTERBOX_RATIO = "0.15";
+    expect(getLetterboxRatio()).toBe(0.15);
+  });
+
+  it("falls back to default letterbox ratio for out-of-range values", () => {
+    process.env.REMIX_LETTERBOX_RATIO = "0.9";
+    expect(getLetterboxRatio()).toBe(0.1);
+  });
+
+  it("defaults render font path to undefined", () => {
+    delete process.env.REMIX_RENDER_FONT_PATH;
+    expect(getRenderFontPath()).toBeUndefined();
+  });
+
+  it("reads render font path from env", () => {
+    process.env.REMIX_RENDER_FONT_PATH = "/fonts/Roboto-Bold.ttf";
+    expect(getRenderFontPath()).toBe("/fonts/Roboto-Bold.ttf");
   });
 });

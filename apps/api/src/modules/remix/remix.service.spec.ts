@@ -665,18 +665,115 @@ describe("RemixService.enqueueRender", () => {
     expect(jobsService.enqueue).not.toHaveBeenCalled();
   });
 
-  it("throws BadRequestException when renderMode=banner_audio", async () => {
+  it("throws BadRequestException when renderMode=banner_audio without bannerJson", async () => {
     prisma.viralRemake.findUnique.mockResolvedValue({
       id: "remake_1",
       mediaVideoKey: "remix/remake_1/source-video.mp4",
       mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
       renderMode: "banner_audio",
+      bannerJson: null,
     });
 
     await expect(service.enqueueRender("remake_1")).rejects.toBeInstanceOf(
       BadRequestException,
     );
     expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("enqueues remix_render when renderMode=banner_audio with bannerJson present", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "banner_audio",
+      bannerJson: { header: "", bottom: "" },
+    });
+
+    const result = await service.enqueueRender("remake_1");
+
+    expect(result).toEqual({ remakeId: "remake_1", jobId: "job_render" });
+    expect(jobsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "remix_render" }),
+    );
+  });
+});
+
+describe("RemixService.generateBanners", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let service: RemixService;
+  let previousLlmMode: string | undefined;
+
+  beforeEach(() => {
+    previousLlmMode = process.env.LLM_MODE;
+    process.env.LLM_MODE = "fake";
+
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      { enqueue: vi.fn() } as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
+    );
+  });
+
+  afterEach(() => {
+    if (previousLlmMode === undefined) {
+      delete process.env.LLM_MODE;
+    } else {
+      process.env.LLM_MODE = previousLlmMode;
+    }
+  });
+
+  it("generates and persists bannerJson from the translated transcript", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      genre: "cultivation",
+      sourceSnapshot: { title: "Tiêu đề gốc" },
+      sourceTranscriptTranslated: {
+        fullText: "Xin chào các bạn, hôm nay chúng ta sẽ...",
+        segments: [],
+      },
+    });
+
+    const result = await service.generateBanners("remake_1");
+
+    expect(result.header).toBeTruthy();
+    expect(result.bottom).toBeTruthy();
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: { bannerJson: result },
+    });
+  });
+
+  it("throws BadRequestException when there is no translated transcript", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: null,
+    });
+
+    await expect(service.generateBanners("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it("throws BadRequestException when the translated transcript has no text", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: { fullText: "", segments: [] },
+    });
+
+    await expect(service.generateBanners("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
   });
 });
 

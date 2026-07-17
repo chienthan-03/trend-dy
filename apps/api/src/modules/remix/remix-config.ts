@@ -126,6 +126,16 @@ export const getSttApiBaseUrl = (): string => {
   return "https://api.openai.com/v1";
 };
 
+/** Height of each letterbox bar as a fraction of source video height. */
+export const getLetterboxRatio = (): number => {
+  const n = Number(process.env.REMIX_LETTERBOX_RATIO ?? "0.10");
+  return Number.isFinite(n) && n > 0 && n < 0.5 ? n : 0.1;
+};
+
+/** Custom font file for letterbox drawtext; omit to use ffmpeg's default/fontconfig. */
+export const getRenderFontPath = (): string | undefined =>
+  process.env.REMIX_RENDER_FONT_PATH?.trim() || undefined;
+
 export type SttResponseFormat = "verbose_json" | "json";
 
 export const getSttResponseFormat = (): SttResponseFormat => {

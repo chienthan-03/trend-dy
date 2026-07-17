@@ -120,6 +120,65 @@ export const probeAudioDurationSec = async (
   }
 };
 
+/** Probe source video width/height (px) via ffprobe; null if unavailable. */
+export const probeVideoDimensions = async (
+  videoBuffer: Buffer,
+): Promise<{ width: number; height: number } | null> => {
+  const ffprobe = getFfprobePath();
+  const dir = await mkdtemp(join(tmpdir(), "remix-video-probe-"));
+  const inputPath = join(dir, "input.mp4");
+
+  try {
+    await writeFile(inputPath, videoBuffer);
+    return await new Promise<{ width: number; height: number } | null>((resolve) => {
+      const proc = spawn(
+        ffprobe,
+        [
+          "-v",
+          "error",
+          "-select_streams",
+          "v:0",
+          "-show_entries",
+          "stream=width,height",
+          "-of",
+          "csv=p=0",
+          inputPath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+
+      let stdout = "";
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      proc.on("error", () => resolve(null));
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          resolve(null);
+          return;
+        }
+
+        const [width, height] = stdout.trim().split(",").map(Number);
+        if (
+          Number.isFinite(width) &&
+          Number.isFinite(height) &&
+          width! > 0 &&
+          height! > 0
+        ) {
+          resolve({ width: width!, height: height! });
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  } catch {
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
 /** Convert WAV (or other non-MP3 audio) to MP3 for dub storage. */
 export const convertWavToMp3 = async (wavBuffer: Buffer): Promise<Buffer> => {
   if (getTtsMode() === "fake") {

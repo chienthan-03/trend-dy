@@ -46,7 +46,7 @@ import { estimateLlmCostUsd } from "../../modules/usage/cost";
 import { PrismaService } from "../../prisma/prisma.service";
 import { QUEUE_NAMES } from "../../queue/queues";
 import { markCompleted, markFailed, markStarted } from "../job-status";
-import type { RemixTranscriptV1 } from "@factory/shared";
+import type { RemixBannerJson, RemixTranscriptV1 } from "@factory/shared";
 
 const [, , , , , REMIX_Q] = QUEUE_NAMES;
 
@@ -701,8 +701,10 @@ export class RemixProcessor extends WorkerHost {
       );
     }
 
-    if (remake.renderMode === "banner_audio") {
-      throw new Error("banner_audio not implemented yet");
+    if (remake.renderMode === "banner_audio" && !remake.bannerJson) {
+      throw new Error(
+        `Remake ${remakeId} requires bannerJson for banner_audio render`,
+      );
     }
 
     const [videoBuffer, dubBuffer] = await Promise.all([
@@ -710,10 +712,14 @@ export class RemixProcessor extends WorkerHost {
       this.remixStorage.getDub(remake.mediaDubAudioKey),
     ]);
 
-    const renderedBuffer = await this.remixRender.renderAudioOnly(
-      videoBuffer,
-      dubBuffer,
-    );
+    const renderedBuffer =
+      remake.renderMode === "banner_audio"
+        ? await this.remixRender.renderBannerAudio(
+            videoBuffer,
+            dubBuffer,
+            remake.bannerJson as RemixBannerJson,
+          )
+        : await this.remixRender.renderAudioOnly(videoBuffer, dubBuffer);
 
     const renderOutputKey = await this.remixStorage.putRender(
       remakeId,

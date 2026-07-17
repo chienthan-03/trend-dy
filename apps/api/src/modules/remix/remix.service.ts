@@ -6,7 +6,17 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import type { Prisma, ViralRemake } from "@prisma/client";
-import type { RemixPackageV1, RemixTranscriptV1 } from "@factory/shared";
+import type {
+  RemixBannerJson,
+  RemixPackageV1,
+  RemixTranscriptV1,
+} from "@factory/shared";
+import { completeJson } from "../../ai/gateway";
+import {
+  buildRemixBannersPrompt,
+  remixBannersV1ResponseSchema,
+  toRemixBannerJson,
+} from "../../ai/prompts/remix.banners.v1";
 import { PrismaService } from "../../prisma/prisma.service";
 import { JobsService } from "../jobs/jobs.service";
 import type { UpdateRemixDto } from "./dto/update-remix.dto";
@@ -175,6 +185,50 @@ export class RemixService {
     return this.prisma.viralRemake.update({ where: { id }, data });
   }
 
+  async generateBanners(id: string): Promise<RemixBannerJson> {
+    const remake = await this.getRemake(id);
+    const transcript =
+      remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
+
+    if (!transcript) {
+      throw new BadRequestException(
+        "Remake has no translated transcript for banner generation",
+      );
+    }
+
+    const excerpt =
+      transcript.fullText?.trim() ||
+      transcript.segments
+        .map((segment) => segment.text.trim())
+        .filter(Boolean)
+        .join(" ");
+
+    if (!excerpt) {
+      throw new BadRequestException(
+        "Translated transcript has no text for banner generation",
+      );
+    }
+
+    const snapshot = remake.sourceSnapshot as Record<string, unknown> | null;
+    const { system, user } = buildRemixBannersPrompt({
+      transcriptExcerpt: excerpt,
+      title: typeof snapshot?.title === "string" ? snapshot.title : undefined,
+      genre: remake.genre ?? undefined,
+    });
+
+    const llm = await completeJson(user, remixBannersV1ResponseSchema, {
+      system,
+    });
+    const bannerJson = toRemixBannerJson(llm.data);
+
+    await this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: { bannerJson: bannerJson as unknown as Prisma.InputJsonValue },
+    });
+
+    return bannerJson;
+  }
+
   async enqueueTts(
     id: string,
     opts: { voiceId?: string } = {},
@@ -281,8 +335,10 @@ export class RemixService {
       );
     }
 
-    if (remake.renderMode === "banner_audio") {
-      throw new BadRequestException("banner_audio not implemented yet");
+    if (remake.renderMode === "banner_audio" && !remake.bannerJson) {
+      throw new BadRequestException(
+        "Remake requires bannerJson before rendering banner_audio",
+      );
     }
 
     await this.prisma.viralRemake.update({

@@ -89,7 +89,10 @@ describe("RemixProcessor", () => {
     getDub: ReturnType<typeof vi.fn>;
     putRender: ReturnType<typeof vi.fn>;
   };
-  let remixRender: { renderAudioOnly: ReturnType<typeof vi.fn> };
+  let remixRender: {
+    renderAudioOnly: ReturnType<typeof vi.fn>;
+    renderBannerAudio: ReturnType<typeof vi.fn>;
+  };
   let processor: RemixProcessor;
 
   beforeEach(() => {
@@ -127,6 +130,9 @@ describe("RemixProcessor", () => {
     };
     remixRender = {
       renderAudioOnly: vi.fn().mockResolvedValue(Buffer.from("rendered-mp4")),
+      renderBannerAudio: vi
+        .fn()
+        .mockResolvedValue(Buffer.from("rendered-banner-mp4")),
     };
 
     mockResolveShareUrl.mockResolvedValue({
@@ -344,12 +350,13 @@ describe("RemixProcessor", () => {
     });
   });
 
-  it("remix_render throws a clear error for banner_audio render mode", async () => {
+  it("remix_render renders banner_audio and marks render_ready", async () => {
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
       mediaVideoKey: "remix/remake_1/source-video.mp4",
       mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
       renderMode: "banner_audio",
+      bannerJson: { header: "Header", bottom: "Bottom" },
     });
 
     const job = {
@@ -358,9 +365,46 @@ describe("RemixProcessor", () => {
       data: { remakeId: "remake_1" },
     } as unknown as BullJob;
 
-    await expect(processor.process(job)).rejects.toThrow(
-      "banner_audio not implemented yet",
+    await processor.process(job);
+
+    expect(remixRender.renderBannerAudio).toHaveBeenCalledWith(
+      Buffer.from("video"),
+      Buffer.from("dub"),
+      { header: "Header", bottom: "Bottom" },
     );
+    expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
+    expect(remixStorage.putRender).toHaveBeenCalledWith(
+      "remake_1",
+      Buffer.from("rendered-banner-mp4"),
+    );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        renderOutputKey: "remix/remake_1/render.mp4",
+        renderPhase: "render_ready",
+        renderError: null,
+      },
+    });
+  });
+
+  it("remix_render fails clearly when banner_audio is missing bannerJson", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "banner_audio",
+      bannerJson: null,
+    });
+
+    const job = {
+      id: "job_render_banner_missing",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await expect(processor.process(job)).rejects.toThrow(/bannerJson/);
+
+    expect(remixRender.renderBannerAudio).not.toHaveBeenCalled();
     expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
   });
 
