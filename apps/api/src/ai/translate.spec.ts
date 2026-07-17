@@ -2,7 +2,10 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { RemixTranscriptV1 } from "@factory/shared";
 import {
   hasChineseScript,
+  isDuplicateChineseSource,
+  normalizeChineseForCompare,
   splitTextForTranslation,
+  stripEchoedChinese,
   translateTranscript,
 } from "./translate";
 
@@ -96,6 +99,133 @@ describe("translateTranscript (llm live mode)", () => {
     expect(result.transcript.provider).toBe("llm");
     expect(result.tokensIn).toBe(120);
     expect(result.tokensOut).toBe(40);
+  });
+
+  it("retries segments that still contain Chinese then succeeds", async () => {
+    vi.mocked(completeJson)
+      .mockResolvedValueOnce({
+        data: {
+          segments: [
+            { index: 0, text: "Xin chào thế giới" },
+            // Missing index 1 → residual Chinese fallback path
+          ],
+        },
+        model: "openai/gpt-4o-mini",
+        tokensIn: 80,
+        tokensOut: 20,
+        provider: "gateway",
+      })
+      .mockResolvedValueOnce({
+        data: {
+          segments: [{ index: 1, text: "Tạm biệt" }],
+        },
+        model: "openai/gpt-4o-mini",
+        tokensIn: 40,
+        tokensOut: 10,
+        provider: "gateway",
+      });
+
+    const result = await translateTranscript(SAMPLE_SOURCE);
+
+    expect(completeJson).toHaveBeenCalledTimes(2);
+    expect(result.transcript.segments[0]?.text).toBe("Xin chào thế giới");
+    expect(result.transcript.segments[1]?.text).toBe("Tạm biệt");
+    expect(hasChineseScript(result.transcript.fullText)).toBe(false);
+    expect(result.tokensIn).toBe(120);
+    expect(result.tokensOut).toBe(30);
+  });
+
+  it("drops residual Chinese that duplicates an already-translated source", async () => {
+    const source: RemixTranscriptV1 = {
+      ...SAMPLE_SOURCE,
+      segments: [
+        { startSec: 0, endSec: 5, text: "你好世界，这是测试。" },
+        { startSec: 5, endSec: 10, text: "你好世界，这是测试。" },
+      ],
+      fullText: "你好世界，这是测试。你好世界，这是测试。",
+    };
+
+    vi.mocked(completeJson).mockResolvedValueOnce({
+      data: {
+        segments: [{ index: 0, text: "Xin chào thế giới, đây là bài kiểm tra." }],
+        // index 1 missing — duplicate source should be dropped, not retried
+      },
+      model: "openai/gpt-4o-mini",
+      tokensIn: 50,
+      tokensOut: 20,
+      provider: "gateway",
+    });
+
+    const result = await translateTranscript(source);
+
+    expect(completeJson).toHaveBeenCalledTimes(1);
+    expect(result.transcript.segments[0]?.text).toBe(
+      "Xin chào thế giới, đây là bài kiểm tra.",
+    );
+    expect(result.transcript.segments[1]?.text).toBe("");
+    expect(hasChineseScript(result.transcript.fullText)).toBe(false);
+  });
+
+  it("strips echoed Chinese from mixed translations", async () => {
+    vi.mocked(completeJson).mockResolvedValueOnce({
+      data: {
+        segments: [
+          { index: 0, text: "Xin chào thế giới 你好世界" },
+          { index: 1, text: "Tạm biệt 再见" },
+        ],
+      },
+      model: "openai/gpt-4o-mini",
+      tokensIn: 50,
+      tokensOut: 20,
+      provider: "gateway",
+    });
+
+    const result = await translateTranscript(SAMPLE_SOURCE);
+
+    expect(result.transcript.segments[0]?.text).toBe("Xin chào thế giới");
+    expect(result.transcript.segments[1]?.text).toBe("Tạm biệt");
+    expect(hasChineseScript(result.transcript.fullText)).toBe(false);
+  });
+
+  it("fails when unique residual Chinese remains after retries", async () => {
+    vi.mocked(completeJson).mockResolvedValue({
+      data: {
+        segments: [
+          { index: 0, text: "你好世界" },
+          { index: 1, text: "再见" },
+        ],
+      },
+      model: "openai/gpt-4o-mini",
+      tokensIn: 10,
+      tokensOut: 5,
+      provider: "gateway",
+    });
+
+    await expect(translateTranscript(SAMPLE_SOURCE)).rejects.toThrow(
+      /still contains Chinese/,
+    );
+    // 1 initial batch + 2 retries × 2 residual segments
+    expect(completeJson).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe("chinese residual helpers", () => {
+  it("normalizes Chinese by stripping non-CJK", () => {
+    expect(normalizeChineseForCompare("你好，世界！")).toBe("你好世界");
+  });
+
+  it("detects duplicate Chinese sources", () => {
+    expect(
+      isDuplicateChineseSource("你好世界，这是测试", ["你好世界，这是测试。"]),
+    ).toBe(true);
+    expect(isDuplicateChineseSource("完全不同的内容啊", ["你好世界"])).toBe(false);
+  });
+
+  it("strips source-echoed Chinese from mixed text", () => {
+    expect(stripEchoedChinese("Xin chào 你好世界", "你好世界")).toBe("Xin chào");
+    expect(stripEchoedChinese("Nội dung mới 独特内容", "你好")).toBe(
+      "Nội dung mới 独特内容",
+    );
   });
 });
 

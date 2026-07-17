@@ -68,6 +68,76 @@ const withTranslateLlmModel = async <T>(fn: () => Promise<T>): Promise<T> => {
 
 export const hasChineseScript = (text: string): boolean => CJK_RE.test(text);
 
+/** Keep CJK only so punctuation/spacing differences do not hide STT duplicates. */
+export const normalizeChineseForCompare = (text: string): string =>
+  (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) ?? []).join("");
+
+/**
+ * True when `candidate` Chinese is the same (or mostly overlapping) content as
+ * another source segment that already has a clean Vietnamese translation.
+ */
+export const isDuplicateChineseSource = (
+  candidate: string,
+  translatedSources: string[],
+): boolean => {
+  const norm = normalizeChineseForCompare(candidate);
+  if (norm.length < 4) return false;
+
+  for (const other of translatedSources) {
+    const otherNorm = normalizeChineseForCompare(other);
+    if (otherNorm.length < 4) continue;
+
+    if (norm === otherNorm) return true;
+
+    const shorter = norm.length <= otherNorm.length ? norm : otherNorm;
+    const longer = norm.length <= otherNorm.length ? otherNorm : norm;
+    if (shorter.length >= 6 && longer.includes(shorter)) return true;
+
+    const shared = countSharedChars(norm, otherNorm);
+    const overlap = shared / Math.max(norm.length, otherNorm.length);
+    if (overlap >= 0.85) return true;
+  }
+
+  return false;
+};
+
+const countSharedChars = (a: string, b: string): number => {
+  const bag = new Map<string, number>();
+  for (const ch of a) {
+    bag.set(ch, (bag.get(ch) ?? 0) + 1);
+  }
+
+  let shared = 0;
+  for (const ch of b) {
+    const count = bag.get(ch) ?? 0;
+    if (count <= 0) continue;
+    shared += 1;
+    bag.set(ch, count - 1);
+  }
+  return shared;
+};
+
+/** Drop CJK runs that merely echo the source (LLM mixed VI + leftover ZH). */
+export const stripEchoedChinese = (translated: string, sourceText: string): string => {
+  if (!hasChineseScript(translated)) return translated.trim();
+
+  const sourceNorm = normalizeChineseForCompare(sourceText);
+  if (!sourceNorm) return translated.trim();
+
+  const stripped = translated
+    .replace(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g, (run) => {
+      const runNorm = normalizeChineseForCompare(run);
+      if (runNorm.length >= 2 && sourceNorm.includes(runNorm)) {
+        return "";
+      }
+      return run;
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return stripped;
+};
+
 export const splitTextForTranslation = (
   text: string,
   maxChars: number,
@@ -317,18 +387,142 @@ const translateSegmentText = async (text: string): Promise<string> => {
   const translatedChunks: string[] = [];
 
   for (const chunk of chunks) {
-    try {
-      const translated =
-        provider === "google"
-          ? await translateChunkWithGoogle(chunk)
-          : await translateChunkWithHuggingFace(chunk);
-      translatedChunks.push(translated || chunk);
-    } catch {
-      translatedChunks.push(chunk);
+    let translated = "";
+    for (let attempt = 0; attempt <= MAX_RESIDUAL_CHINESE_RETRIES; attempt += 1) {
+      try {
+        translated =
+          provider === "google"
+            ? await translateChunkWithGoogle(chunk)
+            : await translateChunkWithHuggingFace(chunk);
+      } catch {
+        translated = "";
+      }
+
+      if (translated && !hasChineseScript(translated)) {
+        break;
+      }
+
+      if (attempt < MAX_RESIDUAL_CHINESE_RETRIES && hasChineseScript(chunk)) {
+        continue;
+      }
     }
+
+    if (!translated || (hasChineseScript(chunk) && hasChineseScript(translated))) {
+      throw new Error(
+        `Translation still contains Chinese after retries (${chunk.slice(0, 48)}…)`,
+      );
+    }
+
+    translatedChunks.push(translated);
   }
 
   return translatedChunks.join(" ").trim();
+};
+
+const MAX_RESIDUAL_CHINESE_RETRIES = 2;
+
+const translateLlmBatch = async (input: {
+  sourceLanguage: string;
+  indexedBatch: Array<{
+    index: number;
+    startSec: number;
+    endSec: number;
+    text: string;
+  }>;
+  contextBefore: string;
+}): Promise<{
+  translations: Map<number, string>;
+  tokensIn: number;
+  tokensOut: number;
+}> => {
+  const prompt = buildTranslateTranscriptPrompt({
+    sourceLanguage: input.sourceLanguage,
+    segments: input.indexedBatch,
+    contextBefore: input.contextBefore,
+  });
+
+  const llm = await withTranslateLlmModel(() =>
+    completeJson(prompt, translateTranscriptResponseSchema, {
+      system: TRANSLATE_TRANSCRIPT_SYSTEM,
+    }),
+  );
+
+  const translations = new Map<number, string>();
+  for (const segment of llm.data.segments) {
+    const text = segment.text.trim();
+    if (!text) continue;
+    translations.set(segment.index, text);
+  }
+
+  return {
+    translations,
+    tokensIn: llm.tokensIn,
+    tokensOut: llm.tokensOut,
+  };
+};
+
+const isCleanVietnamese = (text: string | undefined): boolean => {
+  const trimmed = text?.trim();
+  return Boolean(trimmed && !hasChineseScript(trimmed));
+};
+
+const collectCleanTranslatedSources = (
+  source: RemixTranscriptV1,
+  translatedByIndex: Map<number, string>,
+  excludeIndex?: number,
+): string[] => {
+  const sources: string[] = [];
+
+  for (let index = 0; index < source.segments.length; index += 1) {
+    if (index === excludeIndex) continue;
+    if (!isCleanVietnamese(translatedByIndex.get(index))) continue;
+    sources.push(source.segments[index]!.text);
+  }
+
+  return sources;
+};
+
+type ResidualDecision = {
+  index: number;
+  kind: "duplicate" | "needs_translate";
+};
+
+const classifyResidualChinese = (
+  source: RemixTranscriptV1,
+  translatedByIndex: Map<number, string>,
+): ResidualDecision[] => {
+  const decisions: ResidualDecision[] = [];
+
+  for (let index = 0; index < source.segments.length; index += 1) {
+    const sourceText = source.segments[index]!.text;
+    if (!hasChineseScript(sourceText)) continue;
+
+    const rawTranslated = translatedByIndex.get(index);
+    const stripped = rawTranslated
+      ? stripEchoedChinese(rawTranslated, sourceText)
+      : "";
+
+    if (stripped !== (rawTranslated?.trim() ?? "")) {
+      translatedByIndex.set(index, stripped);
+    }
+
+    if (isCleanVietnamese(translatedByIndex.get(index))) continue;
+
+    const alreadyTranslatedSources = collectCleanTranslatedSources(
+      source,
+      translatedByIndex,
+      index,
+    );
+
+    if (isDuplicateChineseSource(sourceText, alreadyTranslatedSources)) {
+      decisions.push({ index, kind: "duplicate" });
+      continue;
+    }
+
+    decisions.push({ index, kind: "needs_translate" });
+  }
+
+  return decisions;
 };
 
 const translateWithLlm = async (
@@ -341,8 +535,9 @@ const translateWithLlm = async (
   let tokensOut = 0;
   let contextBefore = "";
 
-  for (const batch of batches) {
-    const startIndex = source.segments.findIndex((segment) => segment === batch[0]);
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+    const batch = batches[batchIndex]!;
+    const startIndex = batchIndex * batchSize;
     const indexedBatch = batch.map((segment, offset) => ({
       index: startIndex + offset,
       startSec: segment.startSec,
@@ -350,36 +545,105 @@ const translateWithLlm = async (
       text: segment.text,
     }));
 
-    const prompt = buildTranslateTranscriptPrompt({
+    const result = await translateLlmBatch({
       sourceLanguage: source.language,
-      segments: indexedBatch,
+      indexedBatch,
       contextBefore,
     });
 
-    const llm = await withTranslateLlmModel(() =>
-      completeJson(prompt, translateTranscriptResponseSchema, {
-        system: TRANSLATE_TRANSCRIPT_SYSTEM,
-      }),
-    );
+    tokensIn += result.tokensIn;
+    tokensOut += result.tokensOut;
 
-    tokensIn += llm.tokensIn;
-    tokensOut += llm.tokensOut;
-
-    for (const segment of llm.data.segments) {
-      translatedByIndex.set(segment.index, segment.text.trim());
+    for (const [index, text] of result.translations) {
+      const sourceText = source.segments[index]?.text ?? "";
+      translatedByIndex.set(index, stripEchoedChinese(text, sourceText));
     }
 
     contextBefore = indexedBatch
       .map((segment) => translatedByIndex.get(segment.index) || segment.text)
+      .filter(Boolean)
       .slice(-2)
       .join(" ");
   }
 
-  const segments = source.segments.map((segment, index) => ({
-    startSec: segment.startSec,
-    endSec: segment.endSec,
-    text: translatedByIndex.get(index)?.trim() || segment.text,
-  }));
+  for (let attempt = 0; attempt < MAX_RESIDUAL_CHINESE_RETRIES; attempt += 1) {
+    const residual = classifyResidualChinese(source, translatedByIndex);
+
+    for (const decision of residual) {
+      if (decision.kind === "duplicate") {
+        translatedByIndex.set(decision.index, "");
+      }
+    }
+
+    const toTranslate = residual.filter((item) => item.kind === "needs_translate");
+    if (toTranslate.length === 0) break;
+
+    // Retry unique leftovers one-by-one so a truncated batch cannot drop middle segments again.
+    for (const { index } of toTranslate) {
+      const segment = source.segments[index]!;
+      const prevTranslated = translatedByIndex.get(index - 1);
+      const nextTranslated = translatedByIndex.get(index + 1);
+      const retryContext = [prevTranslated, nextTranslated].filter(Boolean).join(" ");
+
+      const result = await translateLlmBatch({
+        sourceLanguage: source.language,
+        indexedBatch: [
+          {
+            index,
+            startSec: segment.startSec,
+            endSec: segment.endSec,
+            text: segment.text,
+          },
+        ],
+        contextBefore: retryContext,
+      });
+
+      tokensIn += result.tokensIn;
+      tokensOut += result.tokensOut;
+
+      const retried = result.translations.get(index)?.trim();
+      if (!retried) continue;
+
+      const cleaned = stripEchoedChinese(retried, segment.text);
+      if (cleaned && !hasChineseScript(cleaned)) {
+        translatedByIndex.set(index, cleaned);
+      }
+    }
+  }
+
+  const residualAfterRetry = classifyResidualChinese(source, translatedByIndex);
+  for (const decision of residualAfterRetry) {
+    if (decision.kind === "duplicate") {
+      translatedByIndex.set(decision.index, "");
+    }
+  }
+
+  const stillUniqueChinese = residualAfterRetry
+    .filter((item) => item.kind === "needs_translate")
+    .map((item) => item.index);
+
+  if (stillUniqueChinese.length > 0) {
+    throw new Error(
+      `Translation still contains Chinese in ${stillUniqueChinese.length} segment(s): indexes ${stillUniqueChinese.slice(0, 12).join(", ")}${stillUniqueChinese.length > 12 ? ", …" : ""}`,
+    );
+  }
+
+  const segments = source.segments.map((segment, index) => {
+    if (translatedByIndex.has(index)) {
+      return {
+        startSec: segment.startSec,
+        endSec: segment.endSec,
+        text: translatedByIndex.get(index)!.trim(),
+      };
+    }
+
+    return {
+      startSec: segment.startSec,
+      endSec: segment.endSec,
+      // Unique Chinese without a translation should have thrown above.
+      text: hasChineseScript(segment.text) ? "" : segment.text,
+    };
+  });
 
   return { segments, tokensIn, tokensOut };
 };
@@ -427,10 +691,16 @@ export const translateTranscript = async (
   source: RemixTranscriptV1,
 ): Promise<TranslateTranscriptResult> => {
   const model = getTranslateModel();
+  const joinFullText = (segments: RemixTranscriptV1["segments"]): string =>
+    segments
+      .map((segment) => segment.text.trim())
+      .filter(Boolean)
+      .join(" ")
+      .trim();
 
   if (resolveTranslateMode() === "fake") {
     const segments = await translateWithMachineProviders(source);
-    const fullText = segments.map((segment) => segment.text).join(" ").trim();
+    const fullText = joinFullText(segments);
 
     return {
       transcript: {
@@ -447,7 +717,7 @@ export const translateTranscript = async (
 
   if (getTranslateProvider() === "llm") {
     const { segments, tokensIn, tokensOut } = await translateWithLlm(source);
-    const fullText = segments.map((segment) => segment.text).join(" ").trim();
+    const fullText = joinFullText(segments);
 
     return {
       transcript: {
@@ -465,7 +735,7 @@ export const translateTranscript = async (
   }
 
   const segments = await translateWithMachineProviders(source);
-  const fullText = segments.map((segment) => segment.text).join(" ").trim();
+  const fullText = joinFullText(segments);
 
   return {
     transcript: {

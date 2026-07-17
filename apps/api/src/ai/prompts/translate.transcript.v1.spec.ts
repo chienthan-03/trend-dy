@@ -31,6 +31,7 @@ describe("translate.transcript.v1", () => {
     expect(prompt).toContain('"index": 2');
     expect(prompt).toContain("前文");
     expect(prompt).toContain("测试");
+    expect(prompt).toContain("không được giữ chữ Hán");
   });
 
   it("merges translated segments by index", () => {

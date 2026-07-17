@@ -81,13 +81,6 @@ const sampleTranslatedTranscript = (): RemixTranscriptV1 => ({
   model: "gpt-4o-mini",
 });
 
-const completeChecklist = () => ({
-  hasStudioBrand: true,
-  voiceWillBeRerecorded: true,
-  noFullReupload: true,
-  leadApproved: true,
-});
-
 const collectStream = async (stream: NodeJS.ReadableStream): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
@@ -144,7 +137,6 @@ describe("RemixExportService", () => {
       prisma.viralRemake.findUnique.mockResolvedValue({
         id: "remake_1",
         usagePolicy: "remix_draft",
-        policyChecklist: completeChecklist(),
         packageJson: samplePackage(),
       });
 
@@ -157,7 +149,6 @@ describe("RemixExportService", () => {
       prisma.viralRemake.findUnique.mockResolvedValue({
         id: "remake_1",
         usagePolicy: "approved_for_export",
-        policyChecklist: completeChecklist(),
         packageJson: null,
       });
 
@@ -171,7 +162,6 @@ describe("RemixExportService", () => {
       prisma.viralRemake.findUnique.mockResolvedValue({
         id: "remake_1",
         usagePolicy: "approved_for_export",
-        policyChecklist: completeChecklist(),
         packageJson: pkg,
       });
 
@@ -214,7 +204,6 @@ describe("RemixExportService", () => {
       prisma.viralRemake.findUnique.mockResolvedValue({
         id: "remake_1",
         usagePolicy: "approved_for_export",
-        policyChecklist: completeChecklist(),
         packageJson: rawPkg,
       });
 
@@ -234,7 +223,6 @@ describe("RemixExportService", () => {
       prisma.viralRemake.findUnique.mockResolvedValue({
         id: "remake_1",
         usagePolicy: "approved_for_export",
-        policyChecklist: completeChecklist(),
         packageJson: pkg,
         sourceTranscript: transcript,
       });
@@ -266,7 +254,6 @@ describe("RemixExportService", () => {
       prisma.viralRemake.findUnique.mockResolvedValue({
         id: "remake_1",
         usagePolicy: "approved_for_export",
-        policyChecklist: completeChecklist(),
         packageJson: pkg,
         sourceTranscript: transcript,
         sourceTranscriptTranslated: translated,

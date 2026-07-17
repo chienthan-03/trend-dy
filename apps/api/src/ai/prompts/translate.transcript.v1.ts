@@ -23,8 +23,9 @@ export const TRANSLATE_TRANSCRIPT_SYSTEM = [
   "",
   "Quy tắc bắt buộc:",
   "- Dịch sát nghĩa, trung thành nội dung gốc; KHÔNG tóm tắt, KHÔNG viết lại kiểu recap.",
-  "- Giữ đúng số lượng segment và đúng từng index.",
+  "- Giữ đúng số lượng segment và đúng từng index — phải trả đủ MỌI index được gửi.",
   "- Segment tiếng Anh hoặc ngôn ngữ khác cũng dịch sang tiếng Việt.",
+  "- CẤM để lại chữ Hán (汉字) trong bản dịch; mỗi `text` phải là tiếng Việt thuần.",
   "- Nếu rõ ràng là lỗi STT (từ vô nghĩa, nghe nhầm), có thể sửa nhẹ khi dịch dựa trên ngữ cảnh lân cận.",
   "- Tiếng Việt tự nhiên, dễ đọc, nhưng ưu tiên độ chính xác hơn văn phong hoa mỹ.",
   "- Không thêm giải thích, không bọc markdown.",
@@ -58,6 +59,7 @@ export const buildTranslateTranscriptPrompt = (input: {
   return [
     "Dịch các segment sau sang tiếng Việt.",
     "Giữ nguyên index; chỉ trả text đã dịch.",
+    "Không được bỏ sót index; không được giữ chữ Hán trong text.",
     "",
     JSON.stringify(payload, null, 2),
   ].join("\n");

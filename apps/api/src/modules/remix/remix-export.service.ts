@@ -102,18 +102,26 @@ export class RemixExportService {
       });
     }
 
-    archive.append(this.buildSrtFromCues(slim.subtitles.cues), {
-      name: "package.srt",
-    });
+    if (slim.subtitles.cues.length > 0) {
+      archive.append(this.buildSrtFromCues(slim.subtitles.cues), {
+        name: "package.srt",
+      });
+    }
     archive.append(slim.packaging.titles.join("\n"), { name: "titles.txt" });
-    archive.append(
-      [
-        `top: ${slim.banners.top}`,
-        `bottom: ${slim.banners.bottom}`,
-        `watermark: ${slim.banners.watermark}`,
-      ].join("\n"),
-      { name: "banners.txt" },
-    );
+    const hasBanners =
+      slim.banners.top.trim() ||
+      slim.banners.bottom.trim() ||
+      slim.banners.watermark.trim();
+    if (hasBanners) {
+      archive.append(
+        [
+          `top: ${slim.banners.top}`,
+          `bottom: ${slim.banners.bottom}`,
+          `watermark: ${slim.banners.watermark}`,
+        ].join("\n"),
+        { name: "banners.txt" },
+      );
+    }
     archive.append(
       [slim.packaging.description, "", slim.packaging.hashtags.join(" ")].join(
         "\n",

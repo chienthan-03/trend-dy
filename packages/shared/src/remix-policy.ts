@@ -1,11 +1,4 @@
-import type { RemixPackageV1, RemixPolicyChecklist } from "./remix-types";
-
-export const defaultRemixPolicyChecklist = (): RemixPolicyChecklist => ({
-  hasStudioBrand: false,
-  voiceWillBeRerecorded: false,
-  noFullReupload: false,
-  leadApproved: false,
-});
+import type { RemixPackageV1 } from "./remix-types";
 
 /** Jaccard-like word overlap on normalized tokens — advisory only */
 export const literalOverlapRatio = (source: string, target: string): number => {
@@ -24,12 +17,6 @@ export const literalOverlapRatio = (source: string, target: string): number => {
   for (const w of a) if (b.has(w)) inter += 1;
   return inter / Math.max(a.size, b.size);
 };
-
-export const isPolicyChecklistComplete = (c: RemixPolicyChecklist): boolean =>
-  c.hasStudioBrand &&
-  c.voiceWillBeRerecorded &&
-  c.noFullReupload &&
-  c.leadApproved;
 
 export const toSlimRemixPackage = (raw: unknown): RemixPackageV1 => {
   const o = (raw ?? {}) as Record<string, unknown>;
