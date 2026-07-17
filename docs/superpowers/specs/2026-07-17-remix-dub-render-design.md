@@ -246,5 +246,11 @@ Older Phase B emphasized burn-in VN subs + overlay banners. This design:
 2. Whether package-ready (`pipelinePhase=ready`) auto-enqueues `remix_tts` or waits for explicit button  
 3. Exact letterbox height % and brand typography tokens  
 4. Preview without approve vs download-only gate  
+5. `bannerJson` vs legacy `packageJson.banners` — **default: independent**. Letterbox copy lives only in `bannerJson`; packaging banners stay optional/legacy and are not the render source.  
+6. TTS input column — **always** `sourceTranscriptTranslated` segments (STT timings), never package subtitle cues.  
+7. `mediaVideoKey` — download job must persist video bytes before `audio_only` render (prerequisite slice).  
+8. Per-segment re-TTS API — MVP may re-run full `POST …/tts`; plan may add segment-scoped endpoint later.  
+9. Phase state — prefer separate `renderPhase` (or render substates only after package `ready`) to avoid badge confusion.  
+10. ZIP — MVP: MP4 via dedicated download; ZIP may omit MP4 unless plan explicitly includes it.
 
 Defaults if unspecified in plan: **explicit TTS button** (no auto), **approve required for MP4 download**, preview stream allowed for `render_ready` editors.
