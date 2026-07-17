@@ -78,3 +78,27 @@ export type RemixTranscriptV1 = {
 export type RemixSubtitlesV2 = RemixPackageV1["subtitles"] & {
   timing_source: "estimated" | "stt";
 };
+
+export const REMIX_RENDER_MODES = ["audio_only", "banner_audio"] as const;
+export type RemixRenderMode = (typeof REMIX_RENDER_MODES)[number];
+
+export const REMIX_RENDER_PHASES = [
+  "idle",
+  "tts",
+  "tts_ready",
+  "rendering",
+  "render_ready",
+  "failed",
+] as const;
+export type RemixRenderPhase = (typeof REMIX_RENDER_PHASES)[number];
+
+export type RemixBannerJson = {
+  header: string;
+  bottom: string;
+};
+
+export type RemixDubSource = "tts" | "upload";
+
+export type RemixTtsFitFailure = {
+  indexes: number[];
+};
