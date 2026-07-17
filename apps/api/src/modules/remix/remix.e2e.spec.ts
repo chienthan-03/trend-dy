@@ -29,27 +29,54 @@ process.env.REMIX_ENABLED = "true";
 process.env.REMIX_SCRIPT_MODE = "caption";
 process.env.REMIX_SKIP_GENERATE = "false";
 process.env.REMIX_MEDIA_ADAPTER = "fake";
+process.env.REMIX_TTS_MODE = "fake";
+process.env.REMIX_RENDER_MODE = "fake";
 
 const createdJobIdsForSync: string[] = [];
-const e2eAudioStore = new Map<string, Buffer>();
+const e2eObjectStore = new Map<string, Buffer>();
+
+const putObject = async (key: string, buffer: Buffer) => {
+  e2eObjectStore.set(key, buffer);
+  return key;
+};
+
+const getObject = async (key: string) => {
+  const value = e2eObjectStore.get(key);
+  if (!value) {
+    throw new Error(`Missing e2e object for key ${key}`);
+  }
+  return value;
+};
 
 const createE2eRemixStorage = (): RemixStorageService =>
   ({
     audioKey: (remakeId: string) => `remix/${remakeId}/source-audio.wav`,
-    putAudio: async (remakeId: string, wav: Buffer) => {
-      const key = `remix/${remakeId}/source-audio.wav`;
-      e2eAudioStore.set(key, wav);
-      return key;
-    },
-    getAudio: async (key: string) => {
-      const audio = e2eAudioStore.get(key);
-      if (!audio) {
-        throw new Error(`Missing e2e audio for key ${key}`);
-      }
-      return audio;
-    },
+    videoKey: (remakeId: string) => `remix/${remakeId}/source-video.mp4`,
+    dubAudioKey: (remakeId: string) => `remix/${remakeId}/dub-audio.mp3`,
+    renderKey: (remakeId: string) => `remix/${remakeId}/render.mp4`,
+    putAudio: async (remakeId: string, wav: Buffer) =>
+      putObject(`remix/${remakeId}/source-audio.wav`, wav),
+    getAudio: getObject,
     deleteAudio: async (key: string) => {
-      e2eAudioStore.delete(key);
+      e2eObjectStore.delete(key);
+    },
+    putVideo: async (remakeId: string, buffer: Buffer) =>
+      putObject(`remix/${remakeId}/source-video.mp4`, buffer),
+    getVideo: getObject,
+    deleteVideo: async (key: string) => {
+      e2eObjectStore.delete(key);
+    },
+    putDub: async (remakeId: string, buffer: Buffer) =>
+      putObject(`remix/${remakeId}/dub-audio.mp3`, buffer),
+    getDub: getObject,
+    deleteDub: async (key: string) => {
+      e2eObjectStore.delete(key);
+    },
+    putRender: async (remakeId: string, buffer: Buffer) =>
+      putObject(`remix/${remakeId}/render.mp4`, buffer),
+    getRender: getObject,
+    deleteRender: async (key: string) => {
+      e2eObjectStore.delete(key);
     },
   }) as RemixStorageService;
 
@@ -98,13 +125,6 @@ const patchSyncRemixEnqueue = (
   ],
 })
 class RemixE2eWorkerModule {}
-
-const completeChecklist = () => ({
-  hasStudioBrand: true,
-  voiceWillBeRerecorded: true,
-  noFullReupload: true,
-  leadApproved: true,
-});
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -333,12 +353,11 @@ describe("Remix pipeline (e2e)", () => {
     const remake = await pollRemakeReady(trigger.remakeId);
 
     expect(remake.status).toBe("ready");
-    expect(remake.packageJson?.banners?.watermark?.length ?? 0).toBeGreaterThan(0);
     expect(remake.packageJson?.packaging?.titles?.length ?? 0).toBeGreaterThan(0);
     expect(remake.packageJson?.subtitles?.cues?.length ?? 0).toBeGreaterThan(0);
   });
 
-  it("blocks export until checklist is complete and remix is approved", async () => {
+  it("blocks export until remix is approved", async () => {
     const trigger = await apiJson<{ remakeId: string; jobId: string }>(
       "/viral/remix",
       {
@@ -358,13 +377,6 @@ describe("Remix pipeline (e2e)", () => {
 
     const blocked = await apiFetch(`/viral/remix/${trigger.remakeId}/export`);
     expect(blocked.status).toBe(403);
-
-    await apiJson(`/viral/remix/${trigger.remakeId}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        policyChecklist: completeChecklist(),
-      }),
-    });
 
     await apiJson(`/viral/remix/${trigger.remakeId}/approve`, {
       method: "POST",
@@ -410,7 +422,6 @@ describe("Remix pipeline (e2e)", () => {
     const remake = await pollRemakeReady(trigger.remakeId);
 
     expect(remake.status).toBe("ready");
-    expect(remake.packageJson?.banners?.watermark?.length ?? 0).toBeGreaterThan(0);
     expect(remake.packageJson?.packaging?.titles?.length ?? 0).toBeGreaterThan(0);
     expect(remake.packageJson?.subtitles?.cues?.length ?? 0).toBeGreaterThan(0);
 
@@ -502,16 +513,11 @@ describe("Remix pipeline (e2e)", () => {
         subtitles?: { cues?: unknown[] };
       };
       expect(pkg.packaging?.titles?.length ?? 0).toBeGreaterThan(0);
-      expect(pkg.subtitles?.cues?.length ?? 0).toBeGreaterThan(0);
+      // Packaging-only generate: package SRT cues stay empty; full script lives on transcript fields.
+      expect(pkg.subtitles?.cues?.length ?? 0).toBe(0);
+      expect(fullRemake?.sourceTranscriptTranslated).not.toBeNull();
 
       // Approve and export via API
-      await apiJson(`/viral/remix/${remake.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          policyChecklist: completeChecklist(),
-        }),
-      });
-
       await apiJson(`/viral/remix/${remake.id}/approve`, {
         method: "POST",
         body: JSON.stringify({}),
