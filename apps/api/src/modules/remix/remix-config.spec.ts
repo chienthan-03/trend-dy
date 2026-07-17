@@ -6,6 +6,7 @@ import {
   getSttCostPerMinuteUsd,
   getSttModel,
   getSttResponseFormat,
+  getTtsMaxSpeed,
 } from "./remix-config";
 
 describe("remix-config", () => {
@@ -55,5 +56,15 @@ describe("remix-config", () => {
     process.env.REMIX_STT_MODEL = "openai/whisper-large-v3-turbo";
     delete process.env.REMIX_STT_COST_PER_MINUTE_USD;
     expect(getSttCostPerMinuteUsd()).toBeCloseTo(0.04 / 60);
+  });
+
+  it("defaults TTS max speed to 1.25", () => {
+    delete process.env.REMIX_TTS_MAX_SPEED;
+    expect(getTtsMaxSpeed()).toBe(1.25);
+  });
+
+  it("reads TTS max speed from env", () => {
+    process.env.REMIX_TTS_MAX_SPEED = "1.5";
+    expect(getTtsMaxSpeed()).toBe(1.5);
   });
 });

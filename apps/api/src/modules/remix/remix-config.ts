@@ -47,6 +47,11 @@ export const getSttAudioBitrateKbps = (): number => {
   return Number.isFinite(n) && n > 0 ? n : 24;
 };
 
+export const getTtsMaxSpeed = (): number => {
+  const n = Number(process.env.REMIX_TTS_MAX_SPEED ?? "1.25");
+  return Number.isFinite(n) && n > 0 ? n : 1.25;
+};
+
 /** OpenRouter: openai/whisper-large-v3-turbo; OpenAI direct: whisper-1 */
 export const getSttModel = (): string =>
   process.env.REMIX_STT_MODEL?.trim() || "openai/whisper-large-v3-turbo";

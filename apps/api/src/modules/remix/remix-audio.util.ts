@@ -37,7 +37,7 @@ export const buildMinimalWav = (durationSec = 1): Buffer => {
   return Buffer.concat([header, Buffer.alloc(dataSize)]);
 };
 
-const runFfmpeg = (ffmpegPath: string, args: string[]): Promise<void> =>
+export const runFfmpeg = (ffmpegPath: string, args: string[]): Promise<void> =>
   new Promise((resolve, reject) => {
     const proc = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
