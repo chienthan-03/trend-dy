@@ -81,6 +81,14 @@ export class RemixController {
     return this.remixService.retranslate(id);
   }
 
+  @Post(":id/tts")
+  enqueueTts(
+    @Param("id") id: string,
+    @Body() body: { voiceId?: string } = {},
+  ) {
+    return this.remixService.enqueueTts(id, { voiceId: body?.voiceId });
+  }
+
   @Get(":id/transcript")
   getTranscript(@Param("id") id: string) {
     return this.remixService.getTranscript(id);

@@ -6,13 +6,7 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import type { Prisma, ViralRemake } from "@prisma/client";
-import {
-  defaultRemixPolicyChecklist,
-  isPolicyChecklistComplete,
-  type RemixPackageV1,
-  type RemixPolicyChecklist,
-  type RemixTranscriptV1,
-} from "@factory/shared";
+import type { RemixPackageV1, RemixTranscriptV1 } from "@factory/shared";
 import { PrismaService } from "../../prisma/prisma.service";
 import { JobsService } from "../jobs/jobs.service";
 import type { UpdateRemixDto } from "./dto/update-remix.dto";
@@ -135,14 +129,52 @@ export class RemixService {
     if (dto.packageJson !== undefined) {
       data.packageJson = dto.packageJson as Prisma.InputJsonValue;
     }
-    if (dto.policyChecklist !== undefined) {
-      data.policyChecklist = dto.policyChecklist as Prisma.InputJsonValue;
-    }
     if (dto.editorNotes !== undefined) {
       data.editorNotes = dto.editorNotes;
     }
+    if (dto.renderMode !== undefined) {
+      data.renderMode = dto.renderMode;
+    }
+    if (dto.ttsVoiceId !== undefined) {
+      data.ttsVoiceId = dto.ttsVoiceId;
+    }
+    if (dto.bannerJson !== undefined) {
+      data.bannerJson = dto.bannerJson as Prisma.InputJsonValue;
+    }
 
     return this.prisma.viralRemake.update({ where: { id }, data });
+  }
+
+  async enqueueTts(
+    id: string,
+    opts: { voiceId?: string } = {},
+  ): Promise<TriggerRemixResult> {
+    const remake = await this.getRemake(id);
+
+    if (!remake.sourceTranscriptTranslated) {
+      throw new BadRequestException(
+        "Remake has no translated transcript for TTS",
+      );
+    }
+
+    const job = await this.jobsService.enqueue({
+      type: "remix_tts",
+      payload: opts.voiceId
+        ? { remakeId: remake.id, voiceId: opts.voiceId }
+        : { remakeId: remake.id },
+      idempotencyKey: `remix_tts:${remake.id}:${Date.now()}`,
+    });
+
+    await this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: {
+        renderPhase: "tts",
+        renderError: null,
+        ttsFitFailedIndexes: [],
+      },
+    });
+
+    return { remakeId: remake.id, jobId: job.jobId };
   }
 
   async regenerate(id: string): Promise<TriggerRemixResult> {
@@ -280,16 +312,7 @@ export class RemixService {
   }
 
   async approve(id: string, approvedByUserId: string): Promise<ViralRemake> {
-    const remake = await this.getRemake(id);
-    const checklist = remake.policyChecklist as RemixPolicyChecklist | null;
-
-    if (!checklist) {
-      throw new BadRequestException("Policy checklist is required before approval");
-    }
-
-    if (!isPolicyChecklistComplete(checklist)) {
-      throw new BadRequestException("Policy checklist is incomplete");
-    }
+    await this.getRemake(id);
 
     return this.prisma.viralRemake.update({
       where: { id },
@@ -301,21 +324,8 @@ export class RemixService {
     });
   }
 
-  computePolicyWarnings(input: PolicyWarningInput): string[] {
-    const warnings: string[] = [];
-    const pkg = input.packageJson as RemixPackageV1 | null;
-
-    if (!pkg) {
-      return warnings;
-    }
-
-    const watermark = pkg.banners?.watermark ?? "";
-
-    if (!watermark.trim()) {
-      warnings.push("Thiếu branding");
-    }
-
-    return warnings;
+  computePolicyWarnings(_input: PolicyWarningInput): string[] {
+    return [];
   }
 
   private async triggerFromViralItem(
@@ -346,7 +356,6 @@ export class RemixService {
         scriptMode: getRemixScriptMode(),
         pipelinePhase: "pending",
         usagePolicy: "remix_draft",
-        policyChecklist: defaultRemixPolicyChecklist() as Prisma.InputJsonValue,
       },
     });
 
@@ -374,7 +383,6 @@ export class RemixService {
         scriptMode: getRemixScriptMode(),
         pipelinePhase: "pending",
         usagePolicy: "remix_draft",
-        policyChecklist: defaultRemixPolicyChecklist() as Prisma.InputJsonValue,
       },
     });
 

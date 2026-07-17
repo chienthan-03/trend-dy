@@ -20,10 +20,22 @@ import type { DouyinVideoDetail } from "../../modules/remix/douyin-video.adapter
 import { createRemixMediaAdapter } from "../../modules/remix/remix-media.adapter";
 import { extractAudioForStt } from "../../modules/remix/remix-audio.util";
 import {
+  getDefaultTtsVoiceId,
   getMediaTtlDays,
   getRemixScriptMode,
+  getTtsMaxSpeed,
+  getTtsModel,
 } from "../../modules/remix/remix-config";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "../../modules/remix/translate-config";
+import { assembleDubTimeline } from "../../modules/remix/tts/assemble-dub";
+import {
+  applyPad,
+  applyTempo,
+  planSegmentFit,
+  type SegmentFitPlan,
+} from "../../modules/remix/tts/segment-fit";
+import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
+import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
 import { RemixStorageService } from "../../modules/remix/remix-storage.service";
 import { RemixService } from "../../modules/remix/remix.service";
@@ -63,6 +75,14 @@ type RemixTranslatePayload = {
 type RemixGeneratePayload = {
   remakeId: string;
 };
+
+type RemixTtsPayload = {
+  remakeId: string;
+  voiceId?: string;
+};
+
+/** Job names whose failures should only mark the render pipeline, not the main script pipeline. */
+const RENDER_JOB_NAMES = new Set(["remix_tts", "remix_render"]);
 
 const toSourceSnapshot = (detail: DouyinVideoDetail): Prisma.InputJsonValue => ({
   videoId: detail.videoId,
@@ -148,6 +168,10 @@ export class RemixProcessor extends WorkerHost {
           remakeId = (job.data as RemixGeneratePayload).remakeId;
           await this.handleGenerate(jobId, job.data as RemixGeneratePayload);
           break;
+        case "remix_tts":
+          remakeId = (job.data as RemixTtsPayload).remakeId;
+          await this.handleTts(jobId, job.data as RemixTtsPayload);
+          break;
         case "remix_cleanup_media":
           await this.handleCleanupMedia(jobId);
           break;
@@ -161,10 +185,17 @@ export class RemixProcessor extends WorkerHost {
       this.logger.error(`Remix job ${jobId} failed: ${message}`);
 
       if (remakeId) {
-        await this.prisma.viralRemake.update({
-          where: { id: remakeId },
-          data: { status: "failed", pipelinePhase: "failed" },
-        });
+        if (RENDER_JOB_NAMES.has(job.name)) {
+          await this.prisma.viralRemake.update({
+            where: { id: remakeId },
+            data: { renderPhase: "failed", renderError: message.slice(0, 500) },
+          });
+        } else {
+          await this.prisma.viralRemake.update({
+            where: { id: remakeId },
+            data: { status: "failed", pipelinePhase: "failed" },
+          });
+        }
       }
 
       await markFailed(this.prisma, jobId, message);
@@ -516,6 +547,144 @@ export class RemixProcessor extends WorkerHost {
     this.logger.log(
       `remix_generate ${jobId}: package ready for ${remakeId} (${llm.tokensIn}+${llm.tokensOut} tokens)`,
     );
+  }
+
+  private async handleTts(
+    jobId: string,
+    payload: RemixTtsPayload,
+  ): Promise<void> {
+    const { remakeId, voiceId: voiceIdOverride } = payload;
+    if (!remakeId) {
+      throw new Error("remix_tts requires remakeId");
+    }
+
+    const remake = await this.remixService.getRemake(remakeId);
+    const transcript =
+      remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
+    if (!transcript) {
+      throw new Error(
+        `Remake ${remakeId} has no translated transcript for TTS`,
+      );
+    }
+
+    if (remake.dubSource === "upload" && remake.mediaDubAudioKey) {
+      await this.prisma.viralRemake.update({
+        where: { id: remakeId },
+        data: { renderPhase: "tts_ready" },
+      });
+      this.logger.log(
+        `remix_tts ${jobId}: using uploaded dub audio for ${remakeId}`,
+      );
+      return;
+    }
+
+    const adapter = await createTtsAdapter();
+    const voiceId =
+      voiceIdOverride || remake.ttsVoiceId || getDefaultTtsVoiceId();
+    const maxSpeed = getTtsMaxSpeed();
+
+    const fitFailedIndexes: number[] = [];
+    const timelineSegments: {
+      startSec: number;
+      endSec: number;
+      fittedMp3Buffer: Buffer;
+    }[] = [];
+    let ttsCostUsd = 0;
+
+    for (let index = 0; index < transcript.segments.length; index += 1) {
+      const segment = transcript.segments[index]!;
+      const targetDurationSec = Math.max(segment.endSec - segment.startSec, 0.1);
+
+      let synth = await adapter.synthesize({ text: segment.text, voiceId });
+      ttsCostUsd += synth.costUsd;
+      let plan = planSegmentFit({
+        audioDurationSec: synth.durationSec,
+        targetDurationSec,
+        maxSpeed,
+      });
+
+      if (plan.action === "shorten") {
+        const shortened = await shortenSegmentText({
+          text: segment.text,
+          targetDurationSec,
+        });
+
+        if (shortened.text && shortened.text !== segment.text) {
+          synth = await adapter.synthesize({ text: shortened.text, voiceId });
+          ttsCostUsd += synth.costUsd;
+          plan = planSegmentFit({
+            audioDurationSec: synth.durationSec,
+            targetDurationSec,
+            maxSpeed,
+          });
+        }
+
+        if (plan.action === "shorten") {
+          // Still doesn't fit after one shorten pass — record the failure but
+          // keep a best-effort clip (tempo capped at maxSpeed) for this window
+          // rather than dropping the line entirely.
+          fitFailedIndexes.push(index);
+        }
+      }
+
+      const fittedBuffer = await this.applyFitPlan(synth.buffer, plan);
+      timelineSegments.push({
+        startSec: segment.startSec,
+        endSec: segment.endSec,
+        fittedMp3Buffer: fittedBuffer,
+      });
+    }
+
+    const lastSegment = transcript.segments[transcript.segments.length - 1];
+    const totalDurationSec =
+      remake.videoDurationSec ?? lastSegment?.endSec ?? transcript.durationSec;
+
+    const dubBuffer = await assembleDubTimeline({
+      segments: timelineSegments,
+      totalDurationSec,
+    });
+
+    const mediaDubAudioKey = await this.remixStorage.putDub(
+      remakeId,
+      dubBuffer,
+    );
+
+    await this.prisma.viralRemake.update({
+      where: { id: remakeId },
+      data: {
+        mediaDubAudioKey,
+        dubSource: "tts",
+        ttsCostUsd,
+        ttsFitFailedIndexes: fitFailedIndexes,
+        renderPhase: "tts_ready",
+      },
+    });
+
+    await this.prisma.usageEvent.create({
+      data: {
+        jobId,
+        provider: "tts",
+        model: getTtsModel(),
+        costUsd: ttsCostUsd,
+      },
+    });
+
+    this.logger.log(
+      `remix_tts ${jobId}: dub assembled for ${remakeId} (${timelineSegments.length} segments, ${fitFailedIndexes.length} fit failures)`,
+    );
+  }
+
+  private async applyFitPlan(
+    buffer: Buffer,
+    plan: SegmentFitPlan,
+  ): Promise<Buffer> {
+    if (plan.action === "pad" && plan.padSec) {
+      return applyPad(buffer, plan.padSec);
+    }
+    if (plan.action === "speed" || plan.action === "shorten") {
+      return applyTempo(buffer, plan.speed);
+    }
+    return buffer;
   }
 
   private async handleCleanupMedia(jobId: string): Promise<void> {

@@ -12,6 +12,7 @@ import { transcribeAudio } from "../../ai/stt";
 import { translateTranscript } from "../../ai/translate";
 import { extractAudioForStt } from "../../modules/remix/remix-audio.util";
 import { createRemixMediaAdapter } from "../../modules/remix/remix-media.adapter";
+import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 
 vi.mock("../job-status", () => ({
   markStarted: vi.fn().mockResolvedValue(undefined),
@@ -85,6 +86,24 @@ vi.mock("../../modules/remix/remix-media.adapter", () => ({
   }),
 }));
 
+const { shortenSegmentTextMock } = vi.hoisted(() => ({
+  shortenSegmentTextMock: vi.fn(
+    async (input: { text: string; targetDurationSec: number }) => {
+      if (input.text.startsWith("B")) {
+        return { text: "s".repeat(4) };
+      }
+      if (input.text.startsWith("D")) {
+        return { text: "d".repeat(199) };
+      }
+      return { text: input.text };
+    },
+  ),
+}));
+
+vi.mock("../../modules/remix/tts/shorten-segment", () => ({
+  shortenSegmentText: shortenSegmentTextMock,
+}));
+
 describe("RemixProcessor (Full Script Mode)", () => {
   let prisma: any;
   let jobsService: any;
@@ -96,6 +115,8 @@ describe("RemixProcessor (Full Script Mode)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.REMIX_SKIP_GENERATE = "false";
+    process.env.REMIX_TTS_MODE = "fake";
+    delete process.env.REMIX_TTS_MAX_SPEED;
 
     prisma = {
       viralRemake: {
@@ -126,6 +147,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
       putVideo: vi.fn().mockResolvedValue("remix/remake_1/source-video.mp4"),
       putAudio: vi.fn().mockResolvedValue("remix/remake_1/source-audio.mp3"),
       getAudio: vi.fn().mockResolvedValue(Buffer.from("audio")),
+      putDub: vi.fn().mockResolvedValue("remix/remake_1/dub-audio.mp3"),
     };
 
     processor = new RemixProcessor(
@@ -317,5 +339,134 @@ describe("RemixProcessor (Full Script Mode)", () => {
         }),
       }),
     );
+  });
+
+  it("handleTts fits each segment, retries a shorten once, and assembles the dub", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      videoDurationSec: 12,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 10,
+        segments: [
+          { startSec: 0, endSec: 2, text: "a".repeat(20) },
+          { startSec: 2, endSec: 6, text: "B".repeat(200) },
+          { startSec: 6, endSec: 10, text: "D".repeat(200) },
+        ],
+        fullText: "full text",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    // Segment 0 fits immediately; segments 1 and 2 needed a shorten pass.
+    expect(shortenSegmentText).toHaveBeenCalledTimes(2);
+    expect(shortenSegmentText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "B".repeat(200), targetDurationSec: 4 }),
+    );
+    expect(shortenSegmentText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "D".repeat(200), targetDurationSec: 4 }),
+    );
+
+    expect(remixStorage.putDub).toHaveBeenCalledWith(
+      "remake_1",
+      expect.any(Buffer),
+    );
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "remake_1" },
+        data: expect.objectContaining({
+          mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+          dubSource: "tts",
+          ttsCostUsd: 0,
+          // Segment 1 fits after one shorten pass; segment 2 still doesn't.
+          ttsFitFailedIndexes: [2],
+          renderPhase: "tts_ready",
+        }),
+      }),
+    );
+    // Success path must never touch the main script pipeline fields.
+    expect(prisma.viralRemake.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ pipelinePhase: expect.anything() }),
+      }),
+    );
+
+    expect(prisma.usageEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ jobId: "job_tts", provider: "tts" }),
+      }),
+    );
+    expect(markCompleted).toHaveBeenCalledWith(prisma, "job_tts", {
+      remakeId: "remake_1",
+    });
+  });
+
+  it("handleTts skips synthesis when dubSource is upload with existing dub audio", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: "upload",
+      mediaDubAudioKey: "remix/remake_1/uploaded-dub.mp3",
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 10,
+        segments: [{ startSec: 0, endSec: 10, text: "Xin chào" }],
+        fullText: "Xin chào",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_upload",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(remixStorage.putDub).not.toHaveBeenCalled();
+    expect(shortenSegmentText).not.toHaveBeenCalled();
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: { renderPhase: "tts_ready" },
+    });
+  });
+
+  it("remix_tts failure only marks renderPhase/renderError, not the script pipeline", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: null,
+    });
+
+    const job = {
+      id: "job_tts_missing",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await expect(processor.process(job)).rejects.toThrow(/translated transcript/);
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        renderPhase: "failed",
+        renderError: expect.stringContaining("translated transcript"),
+      },
+    });
   });
 });

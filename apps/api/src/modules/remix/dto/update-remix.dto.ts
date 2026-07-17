@@ -1,30 +1,6 @@
-import { Type } from "class-transformer";
-import {
-  IsBoolean,
-  IsObject,
-  IsOptional,
-  IsString,
-  ValidateNested,
-} from "class-validator";
-import type { RemixPackageV1, RemixPolicyChecklist } from "@factory/shared";
-
-class RemixPolicyChecklistDto {
-  @IsOptional()
-  @IsBoolean()
-  hasStudioBrand?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  voiceWillBeRerecorded?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  noFullReupload?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  leadApproved?: boolean;
-}
+import { IsIn, IsObject, IsOptional, IsString } from "class-validator";
+import { REMIX_RENDER_MODES } from "@factory/shared";
+import type { RemixBannerJson, RemixPackageV1, RemixRenderMode } from "@factory/shared";
 
 export class UpdateRemixDto {
   @IsOptional()
@@ -32,11 +8,18 @@ export class UpdateRemixDto {
   packageJson?: RemixPackageV1;
 
   @IsOptional()
-  @ValidateNested()
-  @Type(() => RemixPolicyChecklistDto)
-  policyChecklist?: RemixPolicyChecklist;
+  @IsString()
+  editorNotes?: string;
+
+  @IsOptional()
+  @IsIn([...REMIX_RENDER_MODES])
+  renderMode?: RemixRenderMode;
 
   @IsOptional()
   @IsString()
-  editorNotes?: string;
+  ttsVoiceId?: string;
+
+  @IsOptional()
+  @IsObject()
+  bannerJson?: RemixBannerJson;
 }

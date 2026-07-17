@@ -167,7 +167,7 @@ describe("RemixService.computePolicyWarnings", () => {
     );
   });
 
-  it("warns when watermark is empty", () => {
+  it("returns no warnings for packaging-only packages", () => {
     const warnings = service.computePolicyWarnings({
       sourceSnapshot: { caption: "some caption" },
       packageJson: {
@@ -177,26 +177,7 @@ describe("RemixService.computePolicyWarnings", () => {
         subtitles: { format: "srt", cues: [] },
         transform_notes: {
           source_language: "zh",
-          rewrite_strategy: "recap",
-          risks: [],
-        },
-      },
-    });
-
-    expect(warnings).toContain("Thiếu branding");
-  });
-
-  it("returns no warnings when watermark is present", () => {
-    const warnings = service.computePolicyWarnings({
-      sourceSnapshot: { caption: "some caption" },
-      packageJson: {
-        locale: "vi",
-        banners: { top: "TOP", bottom: "BOTTOM", watermark: "STUDIO ALPHA" },
-        packaging: { titles: ["Title"], description: "Desc", hashtags: [] },
-        subtitles: { format: "srt", cues: [{ start: "00:00:00,000", end: "00:00:01,000", text: "Cue" }] },
-        transform_notes: {
-          source_language: "zh",
-          rewrite_strategy: "recap",
+          rewrite_strategy: "packaging_only",
           risks: [],
         },
       },
@@ -429,5 +410,134 @@ describe("RemixService.retranscribe", () => {
       BadRequestException,
     );
     expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("RemixService.enqueueTts", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let jobsService: { enqueue: ReturnType<typeof vi.fn> };
+  let service: RemixService;
+
+  beforeEach(() => {
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    jobsService = {
+      enqueue: vi.fn().mockResolvedValue({ jobId: "job_tts", status: "queued" }),
+    };
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      jobsService as unknown as JobsService,
+    );
+  });
+
+  it("enqueues remix_tts and resets render fields when a translated transcript exists", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: { fullText: "xin chao", segments: [] },
+    });
+
+    const result = await service.enqueueTts("remake_1");
+
+    expect(result).toEqual({ remakeId: "remake_1", jobId: "job_tts" });
+    expect(jobsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "remix_tts",
+        payload: { remakeId: "remake_1" },
+      }),
+    );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        renderPhase: "tts",
+        renderError: null,
+        ttsFitFailedIndexes: [],
+      },
+    });
+  });
+
+  it("forwards an explicit voiceId in the job payload", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: { fullText: "xin chao", segments: [] },
+    });
+
+    await service.enqueueTts("remake_1", { voiceId: "nova" });
+
+    expect(jobsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "remix_tts",
+        payload: { remakeId: "remake_1", voiceId: "nova" },
+      }),
+    );
+  });
+
+  it("throws BadRequestException when there is no translated transcript", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: null,
+    });
+
+    await expect(service.enqueueTts("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("RemixService.updateRemake", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let service: RemixService;
+
+  beforeEach(() => {
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn().mockResolvedValue({ id: "remake_1" }),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      { enqueue: vi.fn() } as unknown as JobsService,
+    );
+  });
+
+  it("persists renderMode, ttsVoiceId, and bannerJson when provided", async () => {
+    await service.updateRemake("remake_1", {
+      renderMode: "banner_audio",
+      ttsVoiceId: "nova",
+      bannerJson: { header: "Header", bottom: "Bottom" },
+    });
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        renderMode: "banner_audio",
+        ttsVoiceId: "nova",
+        bannerJson: { header: "Header", bottom: "Bottom" },
+      },
+    });
+  });
+
+  it("leaves fields untouched when not provided", async () => {
+    await service.updateRemake("remake_1", { editorNotes: "note" });
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: { editorNotes: "note" },
+    });
   });
 });
