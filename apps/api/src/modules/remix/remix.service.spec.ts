@@ -589,6 +589,97 @@ describe("RemixService.uploadDubAudio", () => {
   });
 });
 
+describe("RemixService.enqueueRender", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let jobsService: { enqueue: ReturnType<typeof vi.fn> };
+  let service: RemixService;
+
+  beforeEach(() => {
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    jobsService = {
+      enqueue: vi.fn().mockResolvedValue({ jobId: "job_render", status: "queued" }),
+    };
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      jobsService as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
+    );
+  });
+
+  it("enqueues remix_render and sets renderPhase=rendering when media is ready", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "audio_only",
+    });
+
+    const result = await service.enqueueRender("remake_1");
+
+    expect(result).toEqual({ remakeId: "remake_1", jobId: "job_render" });
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: { renderPhase: "rendering", renderError: null },
+    });
+    expect(jobsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "remix_render",
+        payload: { remakeId: "remake_1" },
+      }),
+    );
+  });
+
+  it("throws BadRequestException when mediaVideoKey is missing", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: null,
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+    });
+
+    await expect(service.enqueueRender("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("throws BadRequestException when mediaDubAudioKey is missing", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: null,
+    });
+
+    await expect(service.enqueueRender("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("throws BadRequestException when renderMode=banner_audio", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "banner_audio",
+    });
+
+    await expect(service.enqueueRender("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+});
+
 describe("RemixService.updateRemake", () => {
   let prisma: {
     viralRemake: {

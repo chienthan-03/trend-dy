@@ -272,6 +272,33 @@ export class RemixService {
     };
   }
 
+  async enqueueRender(id: string): Promise<TriggerRemixResult> {
+    const remake = await this.getRemake(id);
+
+    if (!remake.mediaVideoKey || !remake.mediaDubAudioKey) {
+      throw new BadRequestException(
+        "Remake requires mediaVideoKey and mediaDubAudioKey before rendering",
+      );
+    }
+
+    if (remake.renderMode === "banner_audio") {
+      throw new BadRequestException("banner_audio not implemented yet");
+    }
+
+    await this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: { renderPhase: "rendering", renderError: null },
+    });
+
+    const job = await this.jobsService.enqueue({
+      type: "remix_render",
+      payload: { remakeId: remake.id },
+      idempotencyKey: `remix_render:${remake.id}:${Date.now()}`,
+    });
+
+    return { remakeId: remake.id, jobId: job.jobId };
+  }
+
   async regenerate(id: string): Promise<TriggerRemixResult> {
     const remake = await this.getRemake(id);
 

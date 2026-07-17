@@ -4,6 +4,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -24,6 +25,8 @@ import { TriggerRemixDto } from "./dto/trigger-remix.dto";
 import { UpdateRemixDto } from "./dto/update-remix.dto";
 import { getDubMaxUploadMb } from "./remix-config";
 import { RemixExportService } from "./remix-export.service";
+import { RemixPolicyGuard } from "./remix-policy.guard";
+import { RemixStorageService } from "./remix-storage.service";
 import { RemixService } from "./remix.service";
 
 @Controller("viral/remix")
@@ -32,6 +35,8 @@ export class RemixController {
   constructor(
     private readonly remixService: RemixService,
     private readonly remixExportService: RemixExportService,
+    private readonly remixPolicyGuard: RemixPolicyGuard,
+    private readonly remixStorage: RemixStorageService,
   ) {}
 
   @Post()
@@ -114,6 +119,41 @@ export class RemixController {
       buffer: file.buffer,
       mimetype: file.mimetype,
       size: file.size,
+    });
+  }
+
+  @Post(":id/render")
+  enqueueRender(@Param("id") id: string) {
+    return this.remixService.enqueueRender(id);
+  }
+
+  @Get(":id/render")
+  async streamRender(
+    @Param("id") id: string,
+    @Query("download") download?: string,
+  ): Promise<StreamableFile> {
+    const remake = await this.remixService.getRemake(id);
+    const isDownload = download === "1";
+
+    if (isDownload) {
+      if (!this.remixPolicyGuard.canExport(remake)) {
+        throw new ForbiddenException("Remix is not approved for export");
+      }
+    } else if (remake.renderPhase !== "render_ready") {
+      throw new BadRequestException("Render is not ready for preview");
+    }
+
+    if (!remake.renderOutputKey) {
+      throw new NotFoundException("Render output not found for this remake");
+    }
+
+    const buffer = await this.remixStorage.getRender(remake.renderOutputKey);
+
+    return new StreamableFile(buffer, {
+      type: "video/mp4",
+      disposition: isDownload
+        ? `attachment; filename="remix-${id}-render.mp4"`
+        : undefined,
     });
   }
 

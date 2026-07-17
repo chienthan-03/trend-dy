@@ -37,6 +37,7 @@ import {
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
+import { RemixRenderService } from "../../modules/remix/remix-render.service";
 import { RemixStorageService } from "../../modules/remix/remix-storage.service";
 import { RemixService } from "../../modules/remix/remix.service";
 import { JobsService } from "../../modules/jobs/jobs.service";
@@ -79,6 +80,10 @@ type RemixGeneratePayload = {
 type RemixTtsPayload = {
   remakeId: string;
   voiceId?: string;
+};
+
+type RemixRenderPayload = {
+  remakeId: string;
 };
 
 /** Job names whose failures should only mark the render pipeline, not the main script pipeline. */
@@ -128,6 +133,7 @@ export class RemixProcessor extends WorkerHost {
     private readonly remixService: RemixService,
     private readonly remixStorage: RemixStorageService,
     private readonly remixCleanup: RemixMediaCleanupService,
+    private readonly remixRender: RemixRenderService,
   ) {
     super();
   }
@@ -171,6 +177,10 @@ export class RemixProcessor extends WorkerHost {
         case "remix_tts":
           remakeId = (job.data as RemixTtsPayload).remakeId;
           await this.handleTts(jobId, job.data as RemixTtsPayload);
+          break;
+        case "remix_render":
+          remakeId = (job.data as RemixRenderPayload).remakeId;
+          await this.handleRender(jobId, job.data as RemixRenderPayload);
           break;
         case "remix_cleanup_media":
           await this.handleCleanupMedia(jobId);
@@ -672,6 +682,54 @@ export class RemixProcessor extends WorkerHost {
     this.logger.log(
       `remix_tts ${jobId}: dub assembled for ${remakeId} (${timelineSegments.length} segments, ${fitFailedIndexes.length} fit failures)`,
     );
+  }
+
+  private async handleRender(
+    jobId: string,
+    payload: RemixRenderPayload,
+  ): Promise<void> {
+    const { remakeId } = payload;
+    if (!remakeId) {
+      throw new Error("remix_render requires remakeId");
+    }
+
+    const remake = await this.remixService.getRemake(remakeId);
+
+    if (!remake.mediaVideoKey || !remake.mediaDubAudioKey) {
+      throw new Error(
+        `Remake ${remakeId} requires mediaVideoKey and mediaDubAudioKey for render`,
+      );
+    }
+
+    if (remake.renderMode === "banner_audio") {
+      throw new Error("banner_audio not implemented yet");
+    }
+
+    const [videoBuffer, dubBuffer] = await Promise.all([
+      this.remixStorage.getVideo(remake.mediaVideoKey),
+      this.remixStorage.getDub(remake.mediaDubAudioKey),
+    ]);
+
+    const renderedBuffer = await this.remixRender.renderAudioOnly(
+      videoBuffer,
+      dubBuffer,
+    );
+
+    const renderOutputKey = await this.remixStorage.putRender(
+      remakeId,
+      renderedBuffer,
+    );
+
+    await this.prisma.viralRemake.update({
+      where: { id: remakeId },
+      data: {
+        renderOutputKey,
+        renderPhase: "render_ready",
+        renderError: null,
+      },
+    });
+
+    this.logger.log(`remix_render ${jobId}: render ready for ${remakeId}`);
   }
 
   private async applyFitPlan(

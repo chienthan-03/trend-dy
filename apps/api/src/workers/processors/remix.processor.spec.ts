@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Job as BullJob } from "bullmq";
 import type { JobsService } from "../../modules/jobs/jobs.service";
 import type { PromptsService } from "../../modules/prompts/prompts.service";
+import type { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
+import type { RemixRenderService } from "../../modules/remix/remix-render.service";
 import type { RemixStorageService } from "../../modules/remix/remix-storage.service";
 import type { RemixService } from "../../modules/remix/remix.service";
 import type { PrismaService } from "../../prisma/prisma.service";
@@ -83,7 +85,11 @@ describe("RemixProcessor", () => {
   let remixStorage: {
     putAudio: ReturnType<typeof vi.fn>;
     getAudio: ReturnType<typeof vi.fn>;
+    getVideo: ReturnType<typeof vi.fn>;
+    getDub: ReturnType<typeof vi.fn>;
+    putRender: ReturnType<typeof vi.fn>;
   };
+  let remixRender: { renderAudioOnly: ReturnType<typeof vi.fn> };
   let processor: RemixProcessor;
 
   beforeEach(() => {
@@ -115,6 +121,12 @@ describe("RemixProcessor", () => {
     remixStorage = {
       putAudio: vi.fn().mockResolvedValue(undefined),
       getAudio: vi.fn().mockResolvedValue(Buffer.from("audio")),
+      getVideo: vi.fn().mockResolvedValue(Buffer.from("video")),
+      getDub: vi.fn().mockResolvedValue(Buffer.from("dub")),
+      putRender: vi.fn().mockResolvedValue("remix/remake_1/render.mp4"),
+    };
+    remixRender = {
+      renderAudioOnly: vi.fn().mockResolvedValue(Buffer.from("rendered-mp4")),
     };
 
     mockResolveShareUrl.mockResolvedValue({
@@ -136,6 +148,8 @@ describe("RemixProcessor", () => {
       promptsService as unknown as PromptsService,
       remixService as unknown as RemixService,
       remixStorage as unknown as RemixStorageService,
+      {} as RemixMediaCleanupService,
+      remixRender as unknown as RemixRenderService,
     );
   });
 
@@ -260,6 +274,94 @@ describe("RemixProcessor", () => {
     expect(markCompleted).toHaveBeenCalledWith(prisma, "job_generate", {
       remakeId: "remake_1",
     });
+  });
+
+  it("remix_render renders audio_only and marks render_ready", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "audio_only",
+    });
+
+    const job = {
+      id: "job_render",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(remixStorage.getVideo).toHaveBeenCalledWith(
+      "remix/remake_1/source-video.mp4",
+    );
+    expect(remixStorage.getDub).toHaveBeenCalledWith(
+      "remix/remake_1/dub-audio.mp3",
+    );
+    expect(remixRender.renderAudioOnly).toHaveBeenCalledWith(
+      Buffer.from("video"),
+      Buffer.from("dub"),
+    );
+    expect(remixStorage.putRender).toHaveBeenCalledWith(
+      "remake_1",
+      Buffer.from("rendered-mp4"),
+    );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        renderOutputKey: "remix/remake_1/render.mp4",
+        renderPhase: "render_ready",
+        renderError: null,
+      },
+    });
+    expect(markCompleted).toHaveBeenCalledWith(prisma, "job_render", {
+      remakeId: "remake_1",
+    });
+  });
+
+  it("remix_render fails clearly when mediaVideoKey or mediaDubAudioKey is missing", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: null,
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+    });
+
+    const job = {
+      id: "job_render_missing",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await expect(processor.process(job)).rejects.toThrow(/mediaVideoKey/);
+
+    expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        renderPhase: "failed",
+        renderError: expect.stringContaining("mediaVideoKey"),
+      },
+    });
+  });
+
+  it("remix_render throws a clear error for banner_audio render mode", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "banner_audio",
+    });
+
+    const job = {
+      id: "job_render_banner",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await expect(processor.process(job)).rejects.toThrow(
+      "banner_audio not implemented yet",
+    );
+    expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
   });
 
   it("marks remake failed and job failed on error", async () => {

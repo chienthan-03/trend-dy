@@ -156,6 +156,8 @@ describe("RemixProcessor (Full Script Mode)", () => {
       promptsService as unknown as PromptsService,
       remixService as unknown as RemixService,
       remixStorage as unknown as RemixStorageService,
+      {} as never,
+      {} as never,
     );
   });
 

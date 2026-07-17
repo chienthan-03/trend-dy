@@ -7,6 +7,7 @@ import { PromptsModule } from "../prompts/prompts.module";
 import { RemixController } from "./remix.controller";
 import { RemixExportService } from "./remix-export.service";
 import { RemixPolicyGuard } from "./remix-policy.guard";
+import { RemixRenderService } from "./remix-render.service";
 import { RemixStorageService } from "./remix-storage.service";
 import { RemixMediaCleanupService } from "./remix-media-cleanup.service";
 import { RemixService } from "./remix.service";
@@ -20,6 +21,7 @@ import { isMediaDownloadAllowed } from "./remix-config";
     RemixService,
     RemixExportService,
     RemixPolicyGuard,
+    RemixRenderService,
     RemixStorageService,
     RemixMediaCleanupService,
   ],
@@ -27,6 +29,7 @@ import { isMediaDownloadAllowed } from "./remix-config";
     RemixService,
     RemixExportService,
     RemixPolicyGuard,
+    RemixRenderService,
     RemixStorageService,
     RemixMediaCleanupService,
   ],
