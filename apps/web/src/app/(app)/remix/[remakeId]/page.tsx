@@ -93,7 +93,8 @@ const RemakeStudioPage = () => {
     ? isProcessingStatus(remake.status) ||
       (remake.pipelinePhase !== "ready" && remake.pipelinePhase !== "failed") ||
       remake.renderPhase === "tts" ||
-      remake.renderPhase === "rendering"
+      remake.renderPhase === "rendering" ||
+      remake.pipelinePhase === "downloading_media"
     : false;
 
   useEffect(() => {

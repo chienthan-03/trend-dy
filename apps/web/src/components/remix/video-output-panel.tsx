@@ -47,7 +47,11 @@ export const VideoOutputPanel = ({
   onError,
   onInfo,
 }: VideoOutputPanelProps) => {
-  const [renderMode, setRenderMode] = useState<RemixRenderMode>(remake.renderMode);
+  const renderPhase: RemixRenderPhase = remake.renderPhase ?? "idle";
+  const ttsFitFailedIndexes = remake.ttsFitFailedIndexes ?? [];
+  const [renderMode, setRenderMode] = useState<RemixRenderMode>(
+    remake.renderMode ?? "audio_only",
+  );
   const [voiceId, setVoiceId] = useState<string>(
     remake.ttsVoiceId || VOICE_OPTIONS[0].id,
   );
@@ -60,22 +64,22 @@ export const VideoOutputPanel = ({
   useEffect(() => {
     if (remakeIdRef.current === remake.id) return;
     remakeIdRef.current = remake.id;
-    setRenderMode(remake.renderMode);
+    setRenderMode(remake.renderMode ?? "audio_only");
     setVoiceId(remake.ttsVoiceId || VOICE_OPTIONS[0].id);
     setBannerHeader(remake.bannerJson?.header ?? "");
     setBannerBottom(remake.bannerJson?.bottom ?? "");
   }, [remake]);
 
   const isBannerMode = renderMode === "banner_audio";
-  const isTtsBusy = remake.renderPhase === "tts" || pending === "tts";
-  const isRenderBusy = remake.renderPhase === "rendering" || pending === "render";
+  const isTtsBusy = renderPhase === "tts" || pending === "tts";
+  const isRenderBusy = renderPhase === "rendering" || pending === "render";
   const bannerReady = isBannerMode
     ? Boolean(remake.bannerJson) || Boolean(bannerHeader.trim() && bannerBottom.trim())
     : true;
   const canRender =
     Boolean(remake.mediaVideoKey) && Boolean(remake.mediaDubAudioKey) && bannerReady;
   const canDownload =
-    remake.usagePolicy === "approved_for_export" && remake.renderPhase === "render_ready";
+    remake.usagePolicy === "approved_for_export" && renderPhase === "render_ready";
   const needsVideoRedownload = !remake.mediaVideoKey;
 
   const handleRedownloadMedia = async () => {
@@ -234,10 +238,10 @@ export const VideoOutputPanel = ({
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={renderPhaseTone(remake.renderPhase)}>
+        <Badge tone={renderPhaseTone(renderPhase)}>
           <span className="flex items-center gap-1.5">
             {isTtsBusy || isRenderBusy ? <Spinner className="animate-pulse" /> : null}
-            {RENDER_PHASE_LABELS[remake.renderPhase] ?? remake.renderPhase}
+            {RENDER_PHASE_LABELS[renderPhase] ?? renderPhase}
           </span>
         </Badge>
         {remake.dubSource ? (
@@ -248,10 +252,10 @@ export const VideoOutputPanel = ({
       </div>
 
       {remake.renderError ? <Alert>{remake.renderError}</Alert> : null}
-      {remake.ttsFitFailedIndexes.length > 0 ? (
+      {ttsFitFailedIndexes.length > 0 ? (
         <Alert variant="info">
-          {remake.ttsFitFailedIndexes.length} dòng phụ đề vượt tốc độ đọc tối đa (dòng số{" "}
-          {remake.ttsFitFailedIndexes.join(", ")}) — kiểm tra lại timing trước khi render.
+          {ttsFitFailedIndexes.length} dòng phụ đề vượt tốc độ đọc tối đa (dòng số{" "}
+          {ttsFitFailedIndexes.join(", ")}) — kiểm tra lại timing trước khi render.
         </Alert>
       ) : null}
 
