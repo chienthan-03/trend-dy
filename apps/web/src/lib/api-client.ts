@@ -394,6 +394,10 @@ export const api = {
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/retranslate`, {
         method: "POST",
       }),
+    redownloadMedia: (id: string) =>
+      apiFetch<RemixTriggerResult>(`/viral/remix/${id}/redownload-media`, {
+        method: "POST",
+      }),
     exportUrl: (id: string) => `${API_BASE}/viral/remix/${id}/export`,
     triggerFromItem: (itemId: string, projectId: string) =>
       apiFetch<RemixTriggerResult>(`/viral/items/${itemId}/remix`, {

@@ -76,6 +76,26 @@ export const VideoOutputPanel = ({
     Boolean(remake.mediaVideoKey) && Boolean(remake.mediaDubAudioKey) && bannerReady;
   const canDownload =
     remake.usagePolicy === "approved_for_export" && remake.renderPhase === "render_ready";
+  const needsVideoRedownload = !remake.mediaVideoKey;
+
+  const handleRedownloadMedia = async () => {
+    setPending("redownload");
+    try {
+      const result = await api.remix.redownloadMedia(remake.id);
+      onInfo(`Đã xếp hàng tải lại video (job ${result.jobId}).`);
+      onRemakeChange({
+        ...remake,
+        status: "running",
+        pipelinePhase: "downloading_media",
+        renderOutputKey: null,
+        renderError: null,
+      });
+    } catch (err) {
+      onError(getErrorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
 
   const handleModeChange = async (mode: RemixRenderMode) => {
     setRenderMode(mode);
@@ -335,6 +355,26 @@ export const VideoOutputPanel = ({
       </fieldset>
 
       <div className="flex flex-wrap items-center gap-2">
+        {needsVideoRedownload ? (
+          <p className="w-full text-sm text-amber-800" role="status">
+            Remake này chưa có video gốc trong storage (download trước khi hệ thống lưu
+            mediaVideoKey). Cần <strong>Tải lại video</strong> trước khi Render preview.
+          </p>
+        ) : null}
+
+        {needsVideoRedownload ? (
+          <Button
+            variant="secondary"
+            onClick={handleRedownloadMedia}
+            disabled={pending === "redownload" || remake.pipelinePhase === "downloading_media"}
+            aria-label="Tải lại video gốc từ Douyin"
+          >
+            {pending === "redownload" || remake.pipelinePhase === "downloading_media"
+              ? "Đang tải video…"
+              : "Tải lại video"}
+          </Button>
+        ) : null}
+
         <Button
           onClick={handleGenerateTts}
           disabled={!pipelineReady || isTtsBusy}

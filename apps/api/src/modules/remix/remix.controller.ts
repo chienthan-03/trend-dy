@@ -92,6 +92,11 @@ export class RemixController {
     return this.remixService.retranslate(id);
   }
 
+  @Post(":id/redownload-media")
+  redownloadMedia(@Param("id") id: string) {
+    return this.remixService.redownloadMedia(id);
+  }
+
   @Post(":id/banners/generate")
   generateBanners(@Param("id") id: string) {
     return this.remixService.generateBanners(id);

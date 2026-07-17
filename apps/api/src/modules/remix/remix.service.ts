@@ -25,7 +25,7 @@ import {
   convertWavToMp3,
   probeAudioDurationSec,
 } from "./remix-audio.util";
-import { assertFullScriptAllowed, getDubMaxUploadMb, getRemixScriptMode } from "./remix-config";
+import { assertFullScriptAllowed, getDubMaxUploadMb, getRemixScriptMode, isMediaDownloadAllowed } from "./remix-config";
 import { RemixStorageService } from "./remix-storage.service";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "./translate-config";
 
@@ -349,8 +349,14 @@ export class RemixService {
     const remake = await this.getRemake(id);
 
     if (!remake.mediaVideoKey || !remake.mediaDubAudioKey) {
+      const missing = [
+        !remake.mediaVideoKey ? "mediaVideoKey (video gốc)" : null,
+        !remake.mediaDubAudioKey ? "mediaDubAudioKey (audio VI)" : null,
+      ]
+        .filter(Boolean)
+        .join(" và ");
       throw new BadRequestException(
-        "Remake requires mediaVideoKey and mediaDubAudioKey before rendering",
+        `Remake thiếu ${missing}. Nếu thiếu video gốc: bấm “Tải lại video” (remake cũ chưa lưu mediaVideoKey). Nếu thiếu audio VI: bấm “Tạo audio VI” hoặc upload dub.`,
       );
     }
 
@@ -369,6 +375,46 @@ export class RemixService {
       type: "remix_render",
       payload: { remakeId: remake.id },
       idempotencyKey: `remix_render:${remake.id}:${Date.now()}`,
+    });
+
+    return { remakeId: remake.id, jobId: job.jobId };
+  }
+
+  async redownloadMedia(id: string): Promise<TriggerRemixResult> {
+    if (!isRemixEnabled()) {
+      throw new ServiceUnavailableException("Remix is disabled");
+    }
+    if (!isMediaDownloadAllowed()) {
+      throw new ServiceUnavailableException(
+        "Media download requires REMIX_ALLOW_MEDIA_DOWNLOAD=true",
+      );
+    }
+
+    const remake = await this.getRemake(id);
+    const snapshot = remake.sourceSnapshot as Record<string, unknown> | null;
+    const playUrl =
+      typeof snapshot?.playUrl === "string" ? snapshot.playUrl.trim() : "";
+
+    if (!playUrl) {
+      throw new BadRequestException(
+        "Remake has no playUrl in sourceSnapshot — cannot re-download media",
+      );
+    }
+
+    await this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: {
+        status: "running",
+        pipelinePhase: "downloading_media",
+        renderOutputKey: null,
+        renderError: null,
+      },
+    });
+
+    const job = await this.jobsService.enqueue({
+      type: "remix_download_media",
+      payload: { remakeId: remake.id },
+      idempotencyKey: `remix_download_media:${remake.id}:${Date.now()}`,
     });
 
     return { remakeId: remake.id, jobId: job.jobId };
