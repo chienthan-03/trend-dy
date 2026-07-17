@@ -86,6 +86,17 @@ vi.mock("../../modules/remix/remix-media.adapter", () => ({
   }),
 }));
 
+const { mockGetVideoDetail } = vi.hoisted(() => ({
+  mockGetVideoDetail: vi.fn(),
+}));
+
+vi.mock("../../modules/remix/douyin-video.adapter", () => ({
+  createDouyinVideoAdapter: vi.fn().mockResolvedValue({
+    resolveShareUrl: vi.fn(),
+    getVideoDetail: mockGetVideoDetail,
+  }),
+}));
+
 const { shortenSegmentTextMock } = vi.hoisted(() => ({
   shortenSegmentTextMock: vi.fn(
     async (input: { text: string; targetDurationSec: number }) => {
@@ -117,6 +128,15 @@ describe("RemixProcessor (Full Script Mode)", () => {
     process.env.REMIX_SKIP_GENERATE = "false";
     process.env.REMIX_TTS_MODE = "fake";
     delete process.env.REMIX_TTS_MAX_SPEED;
+    mockGetVideoDetail.mockResolvedValue({
+      videoId: "vid_1",
+      title: "t",
+      caption: "c",
+      authorHandle: "@a",
+      stats: {},
+      playUrl: "https://play.url/fresh",
+      rawPayload: {},
+    });
 
     prisma = {
       viralRemake: {
@@ -168,18 +188,6 @@ describe("RemixProcessor (Full Script Mode)", () => {
       scriptMode: "full",
     });
 
-    // Mock Douyin adapter
-    const { createDouyinVideoAdapter } = await import("../../modules/remix/douyin-video.adapter");
-    vi.mock("../../modules/remix/douyin-video.adapter", () => ({
-      createDouyinVideoAdapter: vi.fn().mockResolvedValue({
-        getVideoDetail: vi.fn().mockResolvedValue({
-          videoId: "vid_1",
-          playUrl: "https://play.url",
-          rawPayload: {},
-        }),
-      }),
-    }));
-
     const job = {
       id: "job_fetch",
       name: "remix_fetch_detail",
@@ -188,6 +196,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
     await processor.process(job);
 
+    expect(mockGetVideoDetail).toHaveBeenCalledWith("vid_1");
     expect(prisma.viralRemake.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "remake_1" },
@@ -205,8 +214,14 @@ describe("RemixProcessor (Full Script Mode)", () => {
   it("handleDownloadMedia downloads, extracts and enqueues stt", async () => {
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
-      sourceSnapshot: { playUrl: "https://play.url" },
+      externalVideoId: "vid_1",
+      sourceSnapshot: { playUrl: "https://play.url/stale" },
     });
+
+    const { createRemixMediaAdapter } = await import(
+      "../../modules/remix/remix-media.adapter"
+    );
+    const mediaAdapter = await createRemixMediaAdapter();
 
     const job = {
       id: "job_download",
@@ -216,6 +231,11 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
     await processor.process(job);
 
+    expect(mockGetVideoDetail).toHaveBeenCalledWith("vid_1");
+    expect(mediaAdapter.downloadFromPlayUrl).toHaveBeenCalledWith(
+      "https://play.url/fresh",
+      "vid_1",
+    );
     expect(remixStorage.putVideo).toHaveBeenCalledWith(
       "remake_1",
       expect.any(Buffer),
@@ -244,6 +264,50 @@ describe("RemixProcessor (Full Script Mode)", () => {
       type: "remix_stt",
       payload: { remakeId: "remake_1" },
     });
+  });
+
+  it("handleDownloadMedia backfills video only when transcript already exists", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      externalVideoId: "vid_1",
+      status: "ready",
+      sourceSnapshot: { playUrl: "https://play.url/stale" },
+      sourceTranscript: { version: 1, segments: [] },
+      sourceTranscriptTranslated: { version: 1, segments: [] },
+      packageJson: { packaging: { titles: ["a"] } },
+      mediaAudioKey: "remix/remake_1/source-audio.mp3",
+    });
+
+    const { createRemixMediaAdapter } = await import(
+      "../../modules/remix/remix-media.adapter"
+    );
+    const mediaAdapter = await createRemixMediaAdapter();
+
+    const job = {
+      id: "job_download_backfill",
+      name: "remix_download_media",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(mediaAdapter.downloadFromPlayUrl).toHaveBeenCalledWith(
+      "https://play.url/fresh",
+      "vid_1",
+    );
+    expect(extractAudioForStt).not.toHaveBeenCalled();
+    expect(remixStorage.putAudio).not.toHaveBeenCalled();
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "remake_1" },
+        data: expect.objectContaining({
+          mediaVideoKey: "remix/remake_1/source-video.mp4",
+          pipelinePhase: "ready",
+          status: "ready",
+        }),
+      }),
+    );
+    expect(jobsService.enqueue).not.toHaveBeenCalled();
   });
 
   it("handleStt transcribes and enqueues translate", async () => {

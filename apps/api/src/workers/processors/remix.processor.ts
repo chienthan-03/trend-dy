@@ -304,8 +304,30 @@ export class RemixProcessor extends WorkerHost {
   ): Promise<void> {
     const { remakeId } = payload;
     const remake = await this.remixService.getRemake(remakeId);
-    const snapshot = remake.sourceSnapshot as Record<string, any>;
-    const playUrl = snapshot?.playUrl;
+    const snapshot = (remake.sourceSnapshot ?? {}) as Record<string, unknown>;
+
+    // CDN playUrl expires quickly — always refresh via video detail when possible.
+    let playUrl =
+      typeof snapshot.playUrl === "string" ? snapshot.playUrl.trim() : "";
+    const videoId = remake.externalVideoId?.trim();
+    if (videoId && videoId !== "pending") {
+      try {
+        const douyin = await createDouyinVideoAdapter();
+        const detail = await douyin.getVideoDetail(videoId);
+        if (detail.playUrl?.trim()) {
+          playUrl = detail.playUrl.trim();
+          await this.prisma.viralRemake.update({
+            where: { id: remakeId },
+            data: { sourceSnapshot: toSourceSnapshot(detail) },
+          });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `remix_download_media ${jobId}: failed to refresh playUrl for ${videoId} (${message}); falling back to snapshot`,
+        );
+      }
+    }
 
     if (!playUrl) {
       throw new Error(`Remake ${remakeId} missing playUrl in snapshot`);
@@ -323,12 +345,59 @@ export class RemixProcessor extends WorkerHost {
         ? downloaded.contentType
         : "video/mp4",
     );
-    const audio = await extractAudioForStt(downloaded.buffer);
 
     const ttlDays = getMediaTtlDays();
     const mediaExpiresAt = new Date();
     mediaExpiresAt.setDate(mediaExpiresAt.getDate() + ttlDays);
 
+    // Backfill for remakes that already finished STT/package — only need source video for render.
+    const alreadyHasTranscript = Boolean(remake.sourceTranscript);
+    if (alreadyHasTranscript) {
+      const pipelinePhase = remake.packageJson
+        ? "ready"
+        : remake.sourceTranscriptTranslated
+          ? shouldSkipRemixGenerate()
+            ? "ready"
+            : "generating"
+          : isTranslateEnabled()
+            ? "translating"
+            : "generating";
+      const status =
+        pipelinePhase === "ready"
+          ? "ready"
+          : remake.status === "failed"
+            ? "running"
+            : remake.status;
+
+      await this.prisma.viralRemake.update({
+        where: { id: remakeId },
+        data: {
+          mediaVideoKey,
+          mediaExpiresAt,
+          pipelinePhase,
+          status,
+        },
+      });
+
+      if (pipelinePhase === "generating") {
+        await this.jobsService.enqueue({
+          type: "remix_generate",
+          payload: { remakeId },
+        });
+      } else if (pipelinePhase === "translating") {
+        await this.jobsService.enqueue({
+          type: "remix_translate",
+          payload: { remakeId, chainGenerate: true },
+        });
+      }
+
+      this.logger.log(
+        `remix_download_media ${jobId}: video backfill stored for ${remakeId} (phase=${pipelinePhase})`,
+      );
+      return;
+    }
+
+    const audio = await extractAudioForStt(downloaded.buffer);
     const mediaAudioKey = await this.remixStorage.putAudio(
       remakeId,
       audio.buffer,

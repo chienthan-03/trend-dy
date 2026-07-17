@@ -20,6 +20,12 @@ export class HttpRemixMediaAdapter implements RemixMediaAdapter {
       response = await fetch(playUrl, {
         redirect: "follow",
         signal: AbortSignal.timeout(getMediaDownloadTimeoutMs()),
+        headers: {
+          // Douyin CDN often returns 403 without browser-like Referer.
+          Referer: "https://www.douyin.com/",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
