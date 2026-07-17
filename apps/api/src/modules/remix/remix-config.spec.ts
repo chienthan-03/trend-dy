@@ -70,6 +70,15 @@ describe("remix-config", () => {
     expect(getTtsMaxSpeed()).toBe(1.5);
   });
 
+  it("defaults OpenRouter TTS model to Grok Voice", async () => {
+    const { getTtsModel, resolveTtsVoiceId } = await import("./remix-config");
+    process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    delete process.env.REMIX_TTS_API_URL;
+    delete process.env.REMIX_TTS_MODEL;
+    expect(getTtsModel()).toBe("x-ai/grok-voice-tts-1.0");
+    expect(resolveTtsVoiceId("alloy")).toBe("eve");
+  });
+
   it("defaults letterbox ratio to 0.10", () => {
     delete process.env.REMIX_LETTERBOX_RATIO;
     expect(getLetterboxRatio()).toBe(0.1);

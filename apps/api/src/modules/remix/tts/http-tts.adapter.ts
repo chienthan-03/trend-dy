@@ -8,8 +8,10 @@ import {
   getTtsApiKey,
   getTtsCostPer1kCharsUsd,
   getTtsModel,
+  resolveTtsVoiceId,
 } from "../remix-config";
 import type { TtsAdapter, TtsSynthesizeInput, TtsSynthesizeResult } from "./tts.adapter";
+import { runFfmpeg } from "../remix-audio.util";
 
 const getFfprobePath = (): string => process.env.FFPROBE_PATH ?? "ffprobe";
 
@@ -70,6 +72,54 @@ const measureDurationSec = async (buffer: Buffer): Promise<number> => {
   return probed ?? estimateMp3DurationSec(buffer);
 };
 
+const getFfmpegPath = (): string => process.env.FFMPEG_PATH ?? "ffmpeg";
+
+const pcmToMp3 = async (
+  pcmBuffer: Buffer,
+  sampleRateHz: number,
+): Promise<Buffer> => {
+  const ffmpeg = getFfmpegPath();
+  const bitrateKbps = getSttAudioBitrateKbps();
+  const dir = await mkdtemp(join(tmpdir(), "remix-tts-pcm-"));
+  const pcmPath = join(dir, "input.pcm");
+  const outputPath = join(dir, "output.mp3");
+
+  try {
+    await writeFile(pcmPath, pcmBuffer);
+    await runFfmpeg(ffmpeg, [
+      "-y",
+      "-f",
+      "s16le",
+      "-ar",
+      String(sampleRateHz),
+      "-ac",
+      "1",
+      "-i",
+      pcmPath,
+      "-ac",
+      "1",
+      "-ar",
+      "24000",
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      `${bitrateKbps}k`,
+      "-f",
+      "mp3",
+      outputPath,
+    ]);
+    return await readFile(outputPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+const parsePcmSampleRate = (contentType: string | null): number => {
+  const match = contentType?.match(/rate=(\d+)/i);
+  const rate = match ? Number(match[1]) : NaN;
+  return Number.isFinite(rate) && rate > 0 ? rate : 24_000;
+};
+
 const estimateTtsCostUsd = (text: string): number =>
   (text.length / 1000) * getTtsCostPer1kCharsUsd();
 
@@ -78,12 +128,16 @@ export class HttpTtsAdapter implements TtsAdapter {
     const apiKey = getTtsApiKey();
     if (!apiKey) {
       throw new Error(
-        "REMIX_TTS_API_KEY or AI_GATEWAY_API_KEY is required when REMIX_TTS_MODE is live",
+        "REMIX_TTS_API_KEY, AI_GATEWAY_API_KEY, or OPENAI_API_KEY is required when REMIX_TTS_MODE is live",
       );
     }
 
     const baseUrl = getTtsApiBaseUrl();
     const model = getTtsModel();
+    const voice = resolveTtsVoiceId(input.voiceId);
+    // Gemini TTS on OpenRouter only accepts pcm; convert to mp3 for the dub pipeline.
+    const wantsPcm = /gemini/i.test(model);
+    const responseFormat = wantsPcm ? "pcm" : "mp3";
 
     let response: Response;
     try {
@@ -92,11 +146,15 @@ export class HttpTtsAdapter implements TtsAdapter {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          // OpenRouter rankings / app attribution (harmless for OpenAI direct).
+          "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000",
+          "X-Title": "AI Content Factory Remix",
         },
         body: JSON.stringify({
           model,
-          voice: input.voiceId,
+          voice,
           input: input.text,
+          response_format: responseFormat,
         }),
       });
     } catch (error) {
@@ -110,7 +168,12 @@ export class HttpTtsAdapter implements TtsAdapter {
     }
 
     const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    let buffer = Buffer.from(arrayBuffer);
+    const contentType = response.headers.get("content-type");
+    if (wantsPcm || contentType?.includes("audio/pcm")) {
+      buffer = await pcmToMp3(buffer, parsePcmSampleRate(contentType));
+    }
+
     const durationSec = await measureDurationSec(buffer);
 
     return {

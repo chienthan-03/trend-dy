@@ -72,18 +72,72 @@ export const getTtsApiBaseUrl = (): string => {
 };
 
 export const getTtsApiKey = (): string =>
-  process.env.REMIX_TTS_API_KEY?.trim() || process.env.AI_GATEWAY_API_KEY?.trim() || "";
+  process.env.REMIX_TTS_API_KEY?.trim() ||
+  process.env.AI_GATEWAY_API_KEY?.trim() ||
+  process.env.OPENAI_API_KEY?.trim() ||
+  "";
 
-export const getTtsModel = (): string =>
-  process.env.REMIX_TTS_MODEL?.trim() || "tts-1";
+const isOpenRouterTtsBase = (): boolean =>
+  getTtsApiBaseUrl().includes("openrouter.ai");
+
+export const getTtsModel = (): string => {
+  const configured = process.env.REMIX_TTS_MODEL?.trim();
+  if (configured) return configured;
+
+  // OpenRouter speech models use provider/slug ids (not OpenAI-direct `tts-1`).
+  if (isOpenRouterTtsBase()) {
+    return "x-ai/grok-voice-tts-1.0";
+  }
+  return "tts-1";
+};
 
 export const getTtsCostPer1kCharsUsd = (): number => {
   const configured = Number(process.env.REMIX_TTS_COST_PER_1K_CHARS_USD);
   return Number.isFinite(configured) && configured >= 0 ? configured : 0.015;
 };
 
-export const getDefaultTtsVoiceId = (): string =>
-  process.env.REMIX_TTS_VOICE?.trim() || "alloy";
+export const getDefaultTtsVoiceId = (): string => {
+  const configured = process.env.REMIX_TTS_VOICE?.trim();
+  if (configured) return configured;
+  // Grok Voice (OpenRouter default) uses eve/ara/rex/sal/leo — not alloy/nova.
+  if (isOpenRouterTtsBase() && getTtsModel().includes("grok-voice")) {
+    return "eve";
+  }
+  return "alloy";
+};
+
+/** Map Studio voice presets onto provider-specific voice ids when needed. */
+export const resolveTtsVoiceId = (voiceId: string): string => {
+  const trimmed = voiceId.trim() || getDefaultTtsVoiceId();
+  if (!isOpenRouterTtsBase()) return trimmed;
+
+  const model = getTtsModel();
+  if (model.includes("grok-voice")) {
+    const map: Record<string, string> = {
+      alloy: "eve",
+      nova: "ara",
+      echo: "rex",
+      fable: "sal",
+      onyx: "leo",
+      shimmer: "ara",
+    };
+    return map[trimmed] ?? trimmed;
+  }
+
+  if (model.includes("kokoro")) {
+    const map: Record<string, string> = {
+      alloy: "af_alloy",
+      nova: "af_nova",
+      echo: "am_echo",
+      fable: "af_bella",
+      onyx: "am_adam",
+      shimmer: "af_sarah",
+    };
+    return map[trimmed] ?? trimmed;
+  }
+
+  return trimmed;
+};
 
 export const getDubMaxUploadMb = (): number => {
   const n = Number(process.env.REMIX_DUB_MAX_UPLOAD_MB ?? "30");
