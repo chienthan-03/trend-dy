@@ -184,7 +184,7 @@ export const VideoOutputPanel = ({
   const handleRenderPreview = async () => {
     setPending("render");
     try {
-      if (isBannerMode && !remake.bannerJson) {
+      if (isBannerMode) {
         const saved = await saveBanner();
         if (!saved) return;
       }

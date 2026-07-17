@@ -162,7 +162,7 @@ export class RemixService {
   }
 
   async updateRemake(id: string, dto: UpdateRemixDto): Promise<ViralRemake> {
-    await this.getRemake(id);
+    const existing = await this.getRemake(id);
 
     const data: Prisma.ViralRemakeUpdateInput = {};
 
@@ -180,6 +180,16 @@ export class RemixService {
     }
     if (dto.bannerJson !== undefined) {
       data.bannerJson = dto.bannerJson as Prisma.InputJsonValue;
+    }
+
+    const invalidatesRender =
+      (dto.renderMode !== undefined && dto.renderMode !== existing.renderMode) ||
+      dto.bannerJson !== undefined;
+
+    if (invalidatesRender && existing.renderOutputKey) {
+      data.renderOutputKey = null;
+      data.renderPhase = existing.mediaDubAudioKey ? "tts_ready" : "idle";
+      data.renderError = null;
     }
 
     return this.prisma.viralRemake.update({ where: { id }, data });
@@ -223,7 +233,16 @@ export class RemixService {
 
     await this.prisma.viralRemake.update({
       where: { id: remake.id },
-      data: { bannerJson: bannerJson as unknown as Prisma.InputJsonValue },
+      data: {
+        bannerJson: bannerJson as unknown as Prisma.InputJsonValue,
+        ...(remake.renderOutputKey
+          ? {
+              renderOutputKey: null,
+              renderPhase: remake.mediaDubAudioKey ? "tts_ready" : "idle",
+              renderError: null,
+            }
+          : {}),
+      },
     });
 
     return bannerJson;
