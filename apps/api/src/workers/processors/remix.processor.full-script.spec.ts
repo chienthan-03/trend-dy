@@ -23,16 +23,10 @@ vi.mock("../../ai/gateway", () => ({
   completeText: vi.fn().mockResolvedValue({
     text: JSON.stringify({
       locale: "vi",
-      banners: { top: "T", bottom: "B", watermark: "W" },
-      packaging: { titles: ["T"], description: "D", hashtags: ["#H"] },
-      subtitles: {
-        format: "srt",
-        timing_source: "stt",
-        cues: [{ start: "00:00:00,000", end: "00:00:01,000", text: "T" }],
-      },
+      packaging: { titles: ["T1", "T2", "T3"], description: "D", hashtags: ["#H"] },
       transform_notes: {
         source_language: "zh",
-        rewrite_strategy: "recap",
+        rewrite_strategy: "packaging_only",
         risks: [],
         input_mode: "transcript_full",
         source_duration_sec: 10,
@@ -84,7 +78,10 @@ vi.mock("../../modules/remix/remix-audio.util", () => ({
 
 vi.mock("../../modules/remix/remix-media.adapter", () => ({
   createRemixMediaAdapter: vi.fn().mockReturnValue({
-    downloadFromPlayUrl: vi.fn().mockResolvedValue({ buffer: Buffer.from("video") }),
+    downloadFromPlayUrl: vi.fn().mockResolvedValue({
+      buffer: Buffer.from("video"),
+      contentType: "video/mp4",
+    }),
   }),
 }));
 
@@ -126,7 +123,8 @@ describe("RemixProcessor (Full Script Mode)", () => {
       computePolicyWarnings: vi.fn().mockReturnValue([]),
     };
     remixStorage = {
-      putAudio: vi.fn().mockResolvedValue(undefined),
+      putVideo: vi.fn().mockResolvedValue("remix/remake_1/source-video.mp4"),
+      putAudio: vi.fn().mockResolvedValue("remix/remake_1/source-audio.mp3"),
       getAudio: vi.fn().mockResolvedValue(Buffer.from("audio")),
     };
 
@@ -194,6 +192,14 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
     await processor.process(job);
 
+    expect(remixStorage.putVideo).toHaveBeenCalledWith(
+      "remake_1",
+      expect.any(Buffer),
+      "video/mp4",
+    );
+    expect(remixStorage.putVideo.mock.invocationCallOrder[0]).toBeLessThan(
+      extractAudioForStt.mock.invocationCallOrder[0],
+    );
     expect(extractAudioForStt).toHaveBeenCalled();
     expect(remixStorage.putAudio).toHaveBeenCalledWith(
       "remake_1",
@@ -204,6 +210,8 @@ describe("RemixProcessor (Full Script Mode)", () => {
       expect.objectContaining({
         where: { id: "remake_1" },
         data: expect.objectContaining({
+          mediaVideoKey: "remix/remake_1/source-video.mp4",
+          mediaAudioKey: "remix/remake_1/source-audio.mp3",
           pipelinePhase: "transcribing",
         }),
       }),

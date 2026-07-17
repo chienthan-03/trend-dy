@@ -275,6 +275,13 @@ export class RemixProcessor extends WorkerHost {
       playUrl,
       remake.externalVideoId,
     );
+    const mediaVideoKey = await this.remixStorage.putVideo(
+      remakeId,
+      downloaded.buffer,
+      downloaded.contentType.startsWith("video/")
+        ? downloaded.contentType
+        : "video/mp4",
+    );
     const audio = await extractAudioForStt(downloaded.buffer);
 
     const ttlDays = getMediaTtlDays();
@@ -290,6 +297,7 @@ export class RemixProcessor extends WorkerHost {
     await this.prisma.viralRemake.update({
       where: { id: remakeId },
       data: {
+        mediaVideoKey,
         mediaAudioKey,
         mediaExpiresAt,
         pipelinePhase: "transcribing",

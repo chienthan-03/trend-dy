@@ -13,20 +13,25 @@ export class RemixMediaCleanupService {
 
   async cleanupExpiredMedia(): Promise<{ deletedCount: number }> {
     const now = new Date();
-    
-    // Find viral_remakes where mediaExpiresAt < now AND mediaAudioKey IS NOT NULL
+
     const expiredRemakes = await this.prisma.viralRemake.findMany({
       where: {
         mediaExpiresAt: {
           lt: now,
         },
-        mediaAudioKey: {
-          not: null,
-        },
+        OR: [
+          { mediaAudioKey: { not: null } },
+          { mediaVideoKey: { not: null } },
+          { mediaDubAudioKey: { not: null } },
+          { renderOutputKey: { not: null } },
+        ],
       },
       select: {
         id: true,
         mediaAudioKey: true,
+        mediaVideoKey: true,
+        mediaDubAudioKey: true,
+        renderOutputKey: true,
       },
     });
 
@@ -39,18 +44,38 @@ export class RemixMediaCleanupService {
     let deletedCount = 0;
     for (const remake of expiredRemakes) {
       try {
+        const deletions: Promise<void>[] = [];
+
         if (remake.mediaAudioKey) {
-          await this.remixStorage.deleteAudio(remake.mediaAudioKey);
-          
-          await this.prisma.viralRemake.update({
-            where: { id: remake.id },
-            data: {
-              mediaAudioKey: null,
-            },
-          });
-          
-          deletedCount++;
+          deletions.push(this.remixStorage.deleteAudio(remake.mediaAudioKey));
         }
+        if (remake.mediaVideoKey) {
+          deletions.push(this.remixStorage.deleteVideo(remake.mediaVideoKey));
+        }
+        if (remake.mediaDubAudioKey) {
+          deletions.push(this.remixStorage.deleteDub(remake.mediaDubAudioKey));
+        }
+        if (remake.renderOutputKey) {
+          deletions.push(this.remixStorage.deleteRender(remake.renderOutputKey));
+        }
+
+        if (deletions.length === 0) {
+          continue;
+        }
+
+        await Promise.all(deletions);
+
+        await this.prisma.viralRemake.update({
+          where: { id: remake.id },
+          data: {
+            mediaAudioKey: null,
+            mediaVideoKey: null,
+            mediaDubAudioKey: null,
+            renderOutputKey: null,
+          },
+        });
+
+        deletedCount++;
       } catch (error) {
         this.logger.error(`Failed to cleanup media for remake ${remake.id}: ${error.message}`, error.stack);
       }

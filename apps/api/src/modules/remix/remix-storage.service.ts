@@ -12,6 +12,18 @@ export class RemixStorageService {
     return `remix/${remakeId}/source-audio.${ext}`;
   }
 
+  videoKey(remakeId: string): string {
+    return `remix/${remakeId}/source-video.mp4`;
+  }
+
+  dubAudioKey(remakeId: string): string {
+    return `remix/${remakeId}/dub-audio.mp3`;
+  }
+
+  renderKey(remakeId: string): string {
+    return `remix/${remakeId}/render.mp4`;
+  }
+
   async putAudio(
     remakeId: string,
     audio: Buffer,
@@ -28,6 +40,60 @@ export class RemixStorageService {
   }
 
   async deleteAudio(key: string): Promise<void> {
+    await this.storage.deleteObject(key);
+  }
+
+  async putVideo(
+    remakeId: string,
+    video: Buffer,
+    contentType: string = "video/mp4",
+  ): Promise<string> {
+    const key = this.videoKey(remakeId);
+    await this.storage.putObject(key, video, contentType);
+    return key;
+  }
+
+  async getVideo(key: string): Promise<Buffer> {
+    return this.storage.getObject(key);
+  }
+
+  async deleteVideo(key: string): Promise<void> {
+    await this.storage.deleteObject(key);
+  }
+
+  async putDub(
+    remakeId: string,
+    audio: Buffer,
+    contentType: "audio/mpeg" = "audio/mpeg",
+  ): Promise<string> {
+    const key = this.dubAudioKey(remakeId);
+    await this.storage.putObject(key, audio, contentType);
+    return key;
+  }
+
+  async getDub(key: string): Promise<Buffer> {
+    return this.storage.getObject(key);
+  }
+
+  async deleteDub(key: string): Promise<void> {
+    await this.storage.deleteObject(key);
+  }
+
+  async putRender(
+    remakeId: string,
+    video: Buffer,
+    contentType: string = "video/mp4",
+  ): Promise<string> {
+    const key = this.renderKey(remakeId);
+    await this.storage.putObject(key, video, contentType);
+    return key;
+  }
+
+  async getRender(key: string): Promise<Buffer> {
+    return this.storage.getObject(key);
+  }
+
+  async deleteRender(key: string): Promise<void> {
     await this.storage.deleteObject(key);
   }
 }
