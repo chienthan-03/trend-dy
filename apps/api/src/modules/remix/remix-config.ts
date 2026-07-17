@@ -52,6 +52,39 @@ export const getTtsMaxSpeed = (): number => {
   return Number.isFinite(n) && n > 0 ? n : 1.25;
 };
 
+export type TtsMode = "fake" | "live";
+
+export const getTtsMode = (): TtsMode => {
+  const raw = process.env.REMIX_TTS_MODE?.trim().toLowerCase();
+  return raw === "live" ? "live" : "fake";
+};
+
+export const getTtsApiBaseUrl = (): string => {
+  const dedicated = process.env.REMIX_TTS_API_URL?.trim();
+  if (dedicated) {
+    return dedicated.replace(/\/$/, "");
+  }
+  const gateway = process.env.AI_GATEWAY_URL?.trim();
+  if (gateway) {
+    return gateway.replace(/\/$/, "");
+  }
+  return "https://api.openai.com/v1";
+};
+
+export const getTtsApiKey = (): string =>
+  process.env.REMIX_TTS_API_KEY?.trim() || process.env.AI_GATEWAY_API_KEY?.trim() || "";
+
+export const getTtsModel = (): string =>
+  process.env.REMIX_TTS_MODEL?.trim() || "tts-1";
+
+export const getTtsCostPer1kCharsUsd = (): number => {
+  const configured = Number(process.env.REMIX_TTS_COST_PER_1K_CHARS_USD);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 0.015;
+};
+
+export const getDefaultTtsVoiceId = (): string =>
+  process.env.REMIX_TTS_VOICE?.trim() || "alloy";
+
 /** OpenRouter: openai/whisper-large-v3-turbo; OpenAI direct: whisper-1 */
 export const getSttModel = (): string =>
   process.env.REMIX_STT_MODEL?.trim() || "openai/whisper-large-v3-turbo";
