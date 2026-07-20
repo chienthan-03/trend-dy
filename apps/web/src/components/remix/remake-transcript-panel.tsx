@@ -2,6 +2,8 @@
 
 import {
   RemixScriptMode,
+  RemixSegmentRole,
+  RemixTranscriptSegment,
   RemixTranscriptV1,
   secToSrtTimestamp,
 } from "@factory/shared";
@@ -9,6 +11,14 @@ import { useState } from "react";
 import { Badge, Button } from "@/components/ui";
 
 type TranscriptView = "source" | "translated";
+
+const ROLE_LABELS: Record<RemixSegmentRole, string> = {
+  narration: "Review",
+  source: "Giữ gốc",
+};
+
+const effectiveRole = (segment: RemixTranscriptSegment): RemixSegmentRole =>
+  segment.role === "source" ? "source" : "narration";
 
 interface RemakeTranscriptPanelProps {
   transcript: RemixTranscriptV1 | null;
@@ -18,6 +28,10 @@ interface RemakeTranscriptPanelProps {
   pipelinePhase?: string;
   onRetranslate?: () => void;
   retranslatePending?: boolean;
+  onToggleRole?: (index: number, role: RemixSegmentRole) => void;
+  onClassify?: () => void;
+  classifyPending?: boolean;
+  classifyWarning?: string | null;
 }
 
 export const RemakeTranscriptPanel = ({
@@ -28,6 +42,10 @@ export const RemakeTranscriptPanel = ({
   pipelinePhase,
   onRetranslate,
   retranslatePending = false,
+  onToggleRole,
+  onClassify,
+  classifyPending = false,
+  classifyWarning,
 }: RemakeTranscriptPanelProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [view, setView] = useState<TranscriptView>("source");
@@ -89,18 +107,50 @@ export const RemakeTranscriptPanel = ({
               >
                 Đã dịch (VI)
               </Button>
-              {scriptMode === "full" && onRetranslate ? (
-                <Button
-                  variant="secondary"
-                  onClick={onRetranslate}
-                  disabled={isTranslating}
-                  className="ml-auto h-8 px-3 text-xs"
-                  aria-label="Dịch transcript sang tiếng Việt"
-                >
-                  {isTranslating ? "Đang dịch…" : "Dịch transcript"}
-                </Button>
-              ) : null}
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                {scriptMode === "full" && onRetranslate ? (
+                  <Button
+                    variant="secondary"
+                    onClick={onRetranslate}
+                    disabled={isTranslating}
+                    className="h-8 px-3 text-xs"
+                    aria-label="Dịch transcript sang tiếng Việt"
+                  >
+                    {isTranslating ? "Đang dịch…" : "Dịch transcript"}
+                  </Button>
+                ) : null}
+                {view === "translated" && translatedTranscript && onClassify ? (
+                  <Button
+                    variant="secondary"
+                    onClick={onClassify}
+                    disabled={classifyPending}
+                    className="h-8 px-3 text-xs"
+                    aria-label="Phân loại lại vai trò các dòng thoại bằng AI"
+                  >
+                    {classifyPending ? "Đang phân loại…" : "Phân loại lại"}
+                  </Button>
+                ) : null}
+              </div>
             </div>
+
+            {view === "translated" && translatedTranscript ? (
+              <div className="space-y-2">
+                <p className="text-xs text-gray-500">
+                  <strong>Review</strong> = phát ngôn viên đọc, sẽ được lồng tiếng VI
+                  (TTS). <strong>Giữ gốc</strong> = giữ nguyên audio phim gốc, không lồng
+                  tiếng. Đổi vai trò sẽ xoá audio VI đã tạo — cần bấm «Tạo audio VI» lại
+                  trước khi render.
+                </p>
+                {classifyWarning ? (
+                  <div
+                    role="alert"
+                    className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+                  >
+                    {classifyWarning}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             {view === "translated" && !activeTranscript ? (
               <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -139,17 +189,56 @@ export const RemakeTranscriptPanel = ({
                         <tr>
                           <th className="px-3 py-2">Thời gian</th>
                           <th className="px-3 py-2">Văn bản</th>
+                          {view === "translated" ? (
+                            <th className="px-3 py-2">Vai trò</th>
+                          ) : null}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {activeTranscript.segments.map((seg, i) => (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-gray-500">
-                              {secToSrtTimestamp(seg.startSec).split(",")[0]}
-                            </td>
-                            <td className="px-3 py-2 text-gray-700">{seg.text}</td>
-                          </tr>
-                        ))}
+                        {activeTranscript.segments.map((seg, i) => {
+                          const role = effectiveRole(seg);
+                          return (
+                            <tr key={i} className="hover:bg-gray-50">
+                              <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-gray-500">
+                                {secToSrtTimestamp(seg.startSec).split(",")[0]}
+                              </td>
+                              <td className="px-3 py-2 text-gray-700">{seg.text}</td>
+                              {view === "translated" ? (
+                                <td className="whitespace-nowrap px-3 py-2">
+                                  <button
+                                    type="button"
+                                    tabIndex={0}
+                                    aria-pressed={role === "source"}
+                                    aria-label={`Đổi vai trò dòng ${i + 1}: hiện tại ${ROLE_LABELS[role]}`}
+                                    onClick={() =>
+                                      onToggleRole?.(
+                                        i,
+                                        role === "narration" ? "source" : "narration",
+                                      )
+                                    }
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        onToggleRole?.(
+                                          i,
+                                          role === "narration" ? "source" : "narration",
+                                        );
+                                      }
+                                    }}
+                                    disabled={!onToggleRole || classifyPending}
+                                    className="disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    <Badge
+                                      tone={role === "narration" ? "success" : "neutral"}
+                                    >
+                                      {ROLE_LABELS[role]}
+                                    </Badge>
+                                  </button>
+                                </td>
+                              ) : null}
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

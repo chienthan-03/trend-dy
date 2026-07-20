@@ -4,6 +4,7 @@ import type {
   RemixPackageV1,
   RemixPipelinePhase,
   RemixScriptMode,
+  RemixSegmentRole,
   RemixTranscriptV1,
 } from "@factory/shared";
 import Link from "next/link";
@@ -177,6 +178,48 @@ const RemakeStudioPage = () => {
     }
   };
 
+  const handleToggleRole = async (index: number, role: RemixSegmentRole) => {
+    setPending("toggleRole");
+    setError(null);
+    setInfo(null);
+    try {
+      const updated = await api.remix.updateSegmentRoles(remakeId, [
+        { index, role },
+      ]);
+      setRemake(updated);
+      await load();
+      setInfo(
+        "Đã đổi vai trò dòng thoại. Audio VI đã tạo bị xoá — bấm «Tạo audio VI» lại trước khi render.",
+      );
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const handleClassify = async () => {
+    setPending("classify");
+    setError(null);
+    setInfo(null);
+    try {
+      const updated = await api.remix.classifySegments(remakeId, {
+        mode: "reclassify",
+      });
+      setRemake(updated);
+      await load();
+      setInfo(
+        updated.classifyWarning
+          ? updated.classifyWarning
+          : "Đã phân loại lại vai trò dòng thoại. Nếu vai trò thay đổi, cần tạo lại audio VI trước khi render.",
+      );
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
   const handleRegenerate = async () => {
     setPending("regenerate");
     setError(null);
@@ -281,6 +324,10 @@ const RemakeStudioPage = () => {
                 pipelinePhase={remake.pipelinePhase}
                 onRetranslate={handleRetranslate}
                 retranslatePending={pending === "retranslate"}
+                onToggleRole={handleToggleRole}
+                onClassify={handleClassify}
+                classifyPending={pending === "classify" || pending === "toggleRole"}
+                classifyWarning={remake.classifyWarning}
               />
             </div>
           </Card>

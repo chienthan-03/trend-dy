@@ -252,6 +252,12 @@ export const VideoOutputPanel = ({
       </div>
 
       {remake.renderError ? <Alert>{remake.renderError}</Alert> : null}
+      {remake.scriptMode === "full" && !remake.mediaDubAudioKey ? (
+        <Alert variant="info">
+          Chưa có audio VI (hoặc đã bị xoá do đổi vai trò dòng thoại / phân loại lại). Bấm
+          «Tạo audio VI» trước khi Render preview — Render bị khoá khi chưa có audio.
+        </Alert>
+      ) : null}
       {ttsFitFailedIndexes.length > 0 ? (
         <Alert variant="info">
           {ttsFitFailedIndexes.length} dòng phụ đề vượt tốc độ đọc tối đa (dòng số{" "}

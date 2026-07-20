@@ -4,6 +4,7 @@ import type {
   RemixPackageV1,
   RemixRenderMode,
   RemixRenderPhase,
+  RemixSegmentRole,
   RemixTranscriptV1,
 } from "@factory/shared";
 
@@ -158,6 +159,7 @@ export type ViralRemake = {
   bannerJson: RemixBannerJson | null;
   ttsVoiceId: string | null;
   ttsFitFailedIndexes: number[];
+  classifyWarning?: string | null;
 };
 
 export type RemixTriggerResult = {
@@ -393,6 +395,19 @@ export const api = {
     retranslate: (id: string) =>
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/retranslate`, {
         method: "POST",
+      }),
+    classifySegments: (id: string, body?: { mode?: "lazy" | "reclassify" }) =>
+      apiFetch<ViralRemake>(`/viral/remix/${id}/classify-segments`, {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+      }),
+    updateSegmentRoles: (
+      id: string,
+      roles: { index: number; role: RemixSegmentRole }[],
+    ) =>
+      apiFetch<ViralRemake>(`/viral/remix/${id}/transcript/roles`, {
+        method: "PATCH",
+        body: JSON.stringify({ roles }),
       }),
     redownloadMedia: (id: string) =>
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/redownload-media`, {
