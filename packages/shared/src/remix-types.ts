@@ -59,10 +59,15 @@ export const REMIX_PIPELINE_PHASES = [
 ] as const;
 export type RemixPipelinePhase = (typeof REMIX_PIPELINE_PHASES)[number];
 
+export type RemixSegmentRole = "narration" | "source";
+export type RemixSegmentRoleSource = "auto" | "manual";
+
 export type RemixTranscriptSegment = {
   startSec: number;
   endSec: number;
   text: string;
+  role?: RemixSegmentRole;
+  roleSource?: RemixSegmentRoleSource;
 };
 
 export type RemixTranscriptV1 = {
