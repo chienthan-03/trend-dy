@@ -43,6 +43,25 @@ describe("estimateSttCostUsd", () => {
   });
 });
 
+describe("buildSegmentsFromPlainText", () => {
+  it("splits plain text into timed segments", () => {
+    const segments = buildSegmentsFromPlainText("第一句。第二句！", 10);
+    expect(segments).toHaveLength(2);
+    expect(segments[0]!.text).toBe("第一句。");
+    expect(segments[1]!.endSec).toBe(10);
+  });
+
+  it("splits space-separated Chinese without 。！？ into multiple cues", () => {
+    const text =
+      "女人患有严重的关节炎 在旁人眼里她就是个奇形怪物 哥哥因为经商失败 偷偷把母亲留给她的房子拿去了抵押";
+    const segments = buildSegmentsFromPlainText(text, 40);
+    expect(segments.length).toBeGreaterThan(1);
+    expect(segments[0]!.startSec).toBe(0);
+    expect(segments.at(-1)!.endSec).toBe(40);
+    expect(segments.every((segment) => segment.text.length > 0)).toBe(true);
+  });
+});
+
 describe("mapWhisperResponseToTranscript", () => {
   it("maps Whisper verbose_json segments to RemixTranscriptV1", () => {
     const transcript = mapWhisperResponseToTranscript(
@@ -65,6 +84,25 @@ describe("mapWhisperResponseToTranscript", () => {
       model: "whisper-1",
     });
   });
+
+  it("re-splits a single mega segment that spans the whole clip", () => {
+    const megaText =
+      "女人患有严重的关节炎 在旁人眼里她就是个奇形怪物 哥哥因为经商失败 偷偷把母亲留给她的房子拿去了抵押 无处可去的她只能借住在姨妈家里";
+    const transcript = mapWhisperResponseToTranscript(
+      {
+        language: "chinese",
+        duration: 120,
+        text: megaText,
+        segments: [{ start: 0, end: 120, text: megaText }],
+      },
+      "openai/whisper-large-v3-turbo",
+      "gateway",
+    );
+
+    expect(transcript.segments.length).toBeGreaterThan(1);
+    expect(transcript.segments[0]!.startSec).toBe(0);
+    expect(transcript.segments.at(-1)!.endSec).toBe(120);
+  });
 });
 
 describe("detectAudioUploadFormat", () => {
@@ -76,15 +114,6 @@ describe("detectAudioUploadFormat", () => {
   it("defaults to wav for RIFF", () => {
     const format = detectAudioUploadFormat(Buffer.from("RIFF....WAVE"));
     expect(format.fileName).toBe("audio.wav");
-  });
-});
-
-describe("buildSegmentsFromPlainText", () => {
-  it("splits plain text into timed segments", () => {
-    const segments = buildSegmentsFromPlainText("第一句。第二句！", 10);
-    expect(segments).toHaveLength(2);
-    expect(segments[0]!.text).toBe("第一句。");
-    expect(segments[1]!.endSec).toBe(10);
   });
 });
 
@@ -168,14 +197,15 @@ describe("transcribeAudio", () => {
     expect(result.costUsd).toBeCloseTo(0.00125);
   });
 
-  it("uses json response format when AI gateway is configured", async () => {
+  it("requests verbose_json by default when AI gateway is configured", async () => {
     process.env.REMIX_STT_MODE = "live";
     process.env.OPENAI_API_KEY = "test-key";
     process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
     delete process.env.REMIX_STT_API_URL;
+    delete process.env.REMIX_STT_RESPONSE_FORMAT;
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ text: "你好。世界。" }), { status: 200 }),
+      new Response(JSON.stringify(WHISPER_FIXTURE), { status: 200 }),
     );
 
     const result = await transcribeAudio(Buffer.from([0xff, 0xfb, 0x90, 0x00]), {
@@ -184,8 +214,34 @@ describe("transcribeAudio", () => {
 
     const fetchCall = fetchMock.mock.calls[0];
     const form = fetchCall?.[1]?.body as FormData;
-    expect(form?.get("response_format")).toBe("json");
+    expect(form?.get("response_format")).toBe("verbose_json");
     expect(result.transcript.provider).toBe("gateway");
+    expect(result.transcript.segments).toHaveLength(2);
+  });
+
+  it("falls back to json when verbose_json is rejected", async () => {
+    process.env.REMIX_STT_MODE = "live";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    delete process.env.REMIX_STT_API_URL;
+    delete process.env.REMIX_STT_RESPONSE_FORMAT;
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response("verbose_json unsupported", { status: 400 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ text: "你好。世界。" }), { status: 200 }),
+      );
+
+    const result = await transcribeAudio(Buffer.from([0xff, 0xfb, 0x90, 0x00]), {
+      languageHint: "zh",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondForm = fetchMock.mock.calls[1]?.[1]?.body as FormData;
+    expect(secondForm?.get("response_format")).toBe("json");
     expect(result.transcript.segments.length).toBeGreaterThan(0);
     expect(result.transcript.fullText).toContain("你好");
   });

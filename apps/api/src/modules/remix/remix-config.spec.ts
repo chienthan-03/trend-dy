@@ -43,9 +43,16 @@ describe("remix-config", () => {
     expect(getMediaDownloadTimeoutMs()).toBe(600_000);
   });
 
-  it("uses json STT format when AI gateway is set", () => {
+  it("defaults to verbose_json STT format (including AI gateway)", () => {
     process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
     delete process.env.REMIX_STT_API_URL;
+    delete process.env.REMIX_STT_RESPONSE_FORMAT;
+    expect(getSttResponseFormat()).toBe("verbose_json");
+  });
+
+  it("honors REMIX_STT_RESPONSE_FORMAT=json override", () => {
+    process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_RESPONSE_FORMAT = "json";
     expect(getSttResponseFormat()).toBe("json");
   });
 

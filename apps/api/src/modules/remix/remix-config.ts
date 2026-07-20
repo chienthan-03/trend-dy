@@ -197,11 +197,7 @@ export const getSttResponseFormat = (): SttResponseFormat => {
   if (raw === "verbose_json" || raw === "json") {
     return raw;
   }
-  if (process.env.REMIX_STT_API_URL?.trim()) {
-    return "verbose_json";
-  }
-  if (process.env.AI_GATEWAY_URL?.trim()) {
-    return "json";
-  }
+  // Prefer timed segments for dub sync. OpenRouter OpenAI-compatible Whisper
+  // supports verbose_json; plain json is only for providers that reject it.
   return "verbose_json";
 };
