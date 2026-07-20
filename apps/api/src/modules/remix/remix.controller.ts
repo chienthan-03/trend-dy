@@ -21,8 +21,10 @@ import {
   SessionAuthGuard,
   type RequestWithUser,
 } from "../auth/session-auth.guard";
+import { ClassifySegmentsDto } from "./dto/classify-segments.dto";
 import { TriggerRemixDto } from "./dto/trigger-remix.dto";
 import { UpdateRemixDto } from "./dto/update-remix.dto";
+import { UpdateSegmentRolesDto } from "./dto/update-segment-roles.dto";
 import { getDubMaxUploadMb } from "./remix-config";
 import { RemixExportService } from "./remix-export.service";
 import { RemixPolicyGuard } from "./remix-policy.guard";
@@ -170,6 +172,22 @@ export class RemixController {
   @Get(":id/transcript")
   getTranscript(@Param("id") id: string) {
     return this.remixService.getTranscript(id);
+  }
+
+  @Post(":id/classify-segments")
+  classifySegments(
+    @Param("id") id: string,
+    @Body() body: ClassifySegmentsDto = {},
+  ) {
+    return this.remixService.classifySegments(id, { mode: body?.mode });
+  }
+
+  @Patch(":id/transcript/roles")
+  updateSegmentRoles(
+    @Param("id") id: string,
+    @Body() body: UpdateSegmentRolesDto,
+  ) {
+    return this.remixService.updateSegmentRoles(id, body.roles);
   }
 
   @Get(":id/export")

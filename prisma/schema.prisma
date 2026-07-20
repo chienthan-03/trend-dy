@@ -188,6 +188,7 @@ model ViralRemake {
   ttsCostUsd                 Float?    @map("tts_cost_usd")
   ttsFitFailedIndexes        Int[]     @default([]) @map("tts_fit_failed_indexes")
   renderError                String?   @map("render_error")
+  classifyWarning    String?   @map("classify_warning")
   mediaExpiresAt     DateTime? @map("media_expires_at")
   videoDurationSec   Float?    @map("video_duration_sec")
   sttCostUsd         Float?    @map("stt_cost_usd")

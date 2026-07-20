@@ -59,7 +59,8 @@ export const REMIX_PIPELINE_PHASES = [
 ] as const;
 export type RemixPipelinePhase = (typeof REMIX_PIPELINE_PHASES)[number];
 
-export type RemixSegmentRole = "narration" | "source";
+export const REMIX_SEGMENT_ROLES = ["narration", "source"] as const;
+export type RemixSegmentRole = (typeof REMIX_SEGMENT_ROLES)[number];
 export type RemixSegmentRoleSource = "auto" | "manual";
 
 export type RemixTranscriptSegment = {

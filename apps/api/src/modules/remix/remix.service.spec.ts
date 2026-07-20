@@ -10,6 +10,21 @@ import type { PrismaService } from "../../prisma/prisma.service";
 import type { RemixStorageService } from "./remix-storage.service";
 import { RemixService } from "./remix.service";
 
+const { classifyTranslatedSegmentsMock } = vi.hoisted(() => ({
+  classifyTranslatedSegmentsMock: vi.fn(),
+}));
+
+vi.mock("./tts/classify-segments", () => ({
+  classifyTranslatedSegments: classifyTranslatedSegmentsMock,
+}));
+
+const INVALIDATE_DUB_AND_RENDER_DATA = {
+  mediaDubAudioKey: null,
+  renderOutputKey: null,
+  renderPhase: "idle",
+  dubSource: null,
+};
+
 const createRemixStorageMock = () => ({
   putDub: vi.fn().mockResolvedValue("remix/remake_1/dub-audio.mp3"),
 });
@@ -408,6 +423,7 @@ describe("RemixService.retranscribe", () => {
         status: "running",
         pipelinePhase: "transcribing",
         sourceTranscriptTranslated: null,
+        ...INVALIDATE_DUB_AND_RENDER_DATA,
       },
     });
   });
@@ -422,6 +438,324 @@ describe("RemixService.retranscribe", () => {
       BadRequestException,
     );
     expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("RemixService.retranslate", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let jobsService: { enqueue: ReturnType<typeof vi.fn> };
+  let service: RemixService;
+  let previousRemixEnabled: string | undefined;
+  let previousTranslateEnabled: string | undefined;
+
+  beforeEach(() => {
+    previousRemixEnabled = process.env.REMIX_ENABLED;
+    process.env.REMIX_ENABLED = "true";
+    previousTranslateEnabled = process.env.REMIX_TRANSLATE_ENABLED;
+    delete process.env.REMIX_TRANSLATE_ENABLED;
+
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    jobsService = {
+      enqueue: vi.fn().mockResolvedValue({ jobId: "job_translate", status: "queued" }),
+    };
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      jobsService as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
+    );
+  });
+
+  afterEach(() => {
+    if (previousRemixEnabled === undefined) {
+      delete process.env.REMIX_ENABLED;
+    } else {
+      process.env.REMIX_ENABLED = previousRemixEnabled;
+    }
+    if (previousTranslateEnabled === undefined) {
+      delete process.env.REMIX_TRANSLATE_ENABLED;
+    } else {
+      process.env.REMIX_TRANSLATE_ENABLED = previousTranslateEnabled;
+    }
+  });
+
+  it("wipes the translated transcript and invalidates dub/render data", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscript: { fullText: "hello", segments: [] },
+    });
+
+    const result = await service.retranslate("remake_1");
+
+    expect(result).toEqual({ remakeId: "remake_1", jobId: "job_translate" });
+    expect(jobsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "remix_translate",
+        payload: { remakeId: "remake_1", chainGenerate: false },
+      }),
+    );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        status: "running",
+        pipelinePhase: "translating",
+        sourceTranscriptTranslated: null,
+        ...INVALIDATE_DUB_AND_RENDER_DATA,
+      },
+    });
+  });
+
+  it("throws BadRequestException when there is no source transcript", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscript: null,
+    });
+
+    await expect(service.retranslate("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("RemixService.classifySegments", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let service: RemixService;
+
+  const sourceTranscript = {
+    version: 1,
+    language: "zh",
+    durationSec: 2,
+    segments: [{ text: "你好", startSec: 0, endSec: 1 }],
+    fullText: "你好",
+    provider: "fake",
+    model: "fake",
+  };
+
+  const translatedTranscript = {
+    version: 1,
+    language: "vi",
+    durationSec: 2,
+    segments: [{ text: "Xin chào", startSec: 0, endSec: 1 }],
+    fullText: "Xin chào",
+    provider: "fake",
+    model: "fake",
+  };
+
+  beforeEach(() => {
+    classifyTranslatedSegmentsMock.mockReset();
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      { enqueue: vi.fn() } as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
+    );
+  });
+
+  it("throws BadRequestException when source or translated transcript is missing", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscript: null,
+      sourceTranscriptTranslated: translatedTranscript,
+    });
+
+    await expect(service.classifySegments("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(classifyTranslatedSegmentsMock).not.toHaveBeenCalled();
+  });
+
+  it("defaults to reclassify mode and invalidates dub/render when a role changed", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscript,
+      sourceTranscriptTranslated: translatedTranscript,
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderOutputKey: "remix/remake_1/render.mp4",
+    });
+    classifyTranslatedSegmentsMock.mockResolvedValue({
+      ok: true,
+      segments: [{ text: "Xin chào", startSec: 0, endSec: 1, role: "source", roleSource: "auto" }],
+    });
+
+    await service.classifySegments("remake_1");
+
+    expect(classifyTranslatedSegmentsMock).toHaveBeenCalledWith({
+      source: sourceTranscript,
+      translated: translatedTranscript,
+      mode: "reclassify",
+    });
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        sourceTranscriptTranslated: {
+          ...translatedTranscript,
+          segments: [{ text: "Xin chào", startSec: 0, endSec: 1, role: "source", roleSource: "auto" }],
+        },
+        classifyWarning: null,
+        ...INVALIDATE_DUB_AND_RENDER_DATA,
+      },
+    });
+  });
+
+  it("leaves dub/render untouched when no role actually changed", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscript,
+      sourceTranscriptTranslated: translatedTranscript,
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderOutputKey: "remix/remake_1/render.mp4",
+    });
+    classifyTranslatedSegmentsMock.mockResolvedValue({
+      ok: true,
+      segments: [
+        { text: "Xin chào", startSec: 0, endSec: 1, role: "narration", roleSource: "auto" },
+      ],
+    });
+
+    await service.classifySegments("remake_1", { mode: "lazy" });
+
+    expect(classifyTranslatedSegmentsMock).toHaveBeenCalledWith({
+      source: sourceTranscript,
+      translated: translatedTranscript,
+      mode: "lazy",
+    });
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        sourceTranscriptTranslated: {
+          ...translatedTranscript,
+          segments: [
+            { text: "Xin chào", startSec: 0, endSec: 1, role: "narration", roleSource: "auto" },
+          ],
+        },
+        classifyWarning: null,
+      },
+    });
+  });
+
+  it("leaves roles and dub/render untouched but sets classifyWarning on parse failure", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscript,
+      sourceTranscriptTranslated: translatedTranscript,
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderOutputKey: "remix/remake_1/render.mp4",
+    });
+    classifyTranslatedSegmentsMock.mockResolvedValue({
+      ok: false,
+      warning: "Không thể phân loại segment",
+    });
+
+    await service.classifySegments("remake_1");
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: { classifyWarning: "Không thể phân loại segment" },
+    });
+  });
+});
+
+describe("RemixService.updateSegmentRoles", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let service: RemixService;
+
+  const translatedTranscript = {
+    version: 1,
+    language: "vi",
+    durationSec: 2,
+    segments: [
+      { text: "Xin chào", startSec: 0, endSec: 1 },
+      { text: "Tạm biệt", startSec: 1, endSec: 2 },
+    ],
+    fullText: "Xin chào Tạm biệt",
+    provider: "fake",
+    model: "fake",
+  };
+
+  beforeEach(() => {
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      { enqueue: vi.fn() } as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
+    );
+  });
+
+  it("sets roleSource=manual and always invalidates dub/render data", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: translatedTranscript,
+    });
+
+    await service.updateSegmentRoles("remake_1", [{ index: 0, role: "source" }]);
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        sourceTranscriptTranslated: {
+          ...translatedTranscript,
+          segments: [
+            { text: "Xin chào", startSec: 0, endSec: 1, role: "source", roleSource: "manual" },
+            { text: "Tạm biệt", startSec: 1, endSec: 2 },
+          ],
+        },
+        ...INVALIDATE_DUB_AND_RENDER_DATA,
+      },
+    });
+  });
+
+  it("throws BadRequestException when there is no translated transcript", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: null,
+    });
+
+    await expect(
+      service.updateSegmentRoles("remake_1", [{ index: 0, role: "source" }]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.viralRemake.update).not.toHaveBeenCalled();
+  });
+
+  it("throws BadRequestException when an index is out of range", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: translatedTranscript,
+    });
+
+    await expect(
+      service.updateSegmentRoles("remake_1", [{ index: 5, role: "source" }]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.viralRemake.update).not.toHaveBeenCalled();
   });
 });
 

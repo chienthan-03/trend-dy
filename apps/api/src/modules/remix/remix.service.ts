@@ -9,6 +9,7 @@ import type { Prisma, ViralRemake } from "@prisma/client";
 import type {
   RemixBannerJson,
   RemixPackageV1,
+  RemixSegmentRole,
   RemixTranscriptV1,
 } from "@factory/shared";
 import { completeJson } from "../../ai/gateway";
@@ -27,6 +28,11 @@ import {
 } from "./remix-audio.util";
 import { assertFullScriptAllowed, getDubMaxUploadMb, getRemixScriptMode, isMediaDownloadAllowed } from "./remix-config";
 import { RemixStorageService } from "./remix-storage.service";
+import {
+  classifyTranslatedSegments,
+  type ClassifyRolesMode,
+} from "./tts/classify-segments";
+import { effectiveRole } from "./tts/segment-role";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "./translate-config";
 
 export type TriggerRemixInput = {
@@ -64,6 +70,19 @@ export type UploadDubAudioResult = {
   renderPhase: "tts_ready";
   durationMismatch: boolean;
 };
+
+export type SegmentRolePatch = {
+  index: number;
+  role: RemixSegmentRole;
+};
+
+/** Clears anything downstream of the translated transcript so a stale dub/render never survives a role or text change. */
+const invalidateDubAndRenderData = {
+  mediaDubAudioKey: null,
+  renderOutputKey: null,
+  renderPhase: "idle",
+  dubSource: null,
+} as const;
 
 const ALLOWED_DUB_MIME_TYPES = new Set([
   "audio/mpeg",
@@ -504,6 +523,7 @@ export class RemixService {
         status: "running",
         pipelinePhase: "transcribing",
         sourceTranscriptTranslated: null,
+        ...invalidateDubAndRenderData,
       },
     });
 
@@ -539,10 +559,103 @@ export class RemixService {
         status: "running",
         pipelinePhase: "translating",
         sourceTranscriptTranslated: null,
+        ...invalidateDubAndRenderData,
       },
     });
 
     return { remakeId: remake.id, jobId: job.jobId };
+  }
+
+  async classifySegments(
+    id: string,
+    opts: { mode?: ClassifyRolesMode } = {},
+  ): Promise<ViralRemake> {
+    const remake = await this.getRemake(id);
+    const mode: ClassifyRolesMode = opts.mode ?? "reclassify";
+
+    const source = remake.sourceTranscript as RemixTranscriptV1 | null;
+    const translated =
+      remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
+
+    if (!source || !translated) {
+      throw new BadRequestException(
+        "Remake requires both source and translated transcripts to classify segments",
+      );
+    }
+
+    const result = await classifyTranslatedSegments({ source, translated, mode });
+
+    if (!result.ok) {
+      return this.prisma.viralRemake.update({
+        where: { id: remake.id },
+        data: { classifyWarning: result.warning },
+      });
+    }
+
+    const rolesChanged = translated.segments.some(
+      (segment, index) =>
+        effectiveRole(segment) !== effectiveRole(result.segments[index]!),
+    );
+
+    const nextTranslated: RemixTranscriptV1 = {
+      ...translated,
+      segments: result.segments,
+    };
+
+    return this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: {
+        sourceTranscriptTranslated:
+          nextTranslated as unknown as Prisma.InputJsonValue,
+        classifyWarning: null,
+        ...(rolesChanged ? invalidateDubAndRenderData : {}),
+      },
+    });
+  }
+
+  async updateSegmentRoles(
+    id: string,
+    roles: SegmentRolePatch[],
+  ): Promise<ViralRemake> {
+    const remake = await this.getRemake(id);
+    const translated =
+      remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
+
+    if (!translated) {
+      throw new BadRequestException(
+        "Remake has no translated transcript to patch roles on",
+      );
+    }
+
+    const roleByIndex = new Map(roles.map((entry) => [entry.index, entry.role]));
+    const hasOutOfRangeIndex = roles.some(
+      (entry) => entry.index < 0 || entry.index >= translated.segments.length,
+    );
+    if (hasOutOfRangeIndex) {
+      throw new BadRequestException("Segment role index out of range");
+    }
+
+    const nextSegments = translated.segments.map((segment, index) => {
+      const role = roleByIndex.get(index);
+      if (role === undefined) {
+        return segment;
+      }
+      return { ...segment, role, roleSource: "manual" as const };
+    });
+
+    const nextTranslated: RemixTranscriptV1 = {
+      ...translated,
+      segments: nextSegments,
+    };
+
+    return this.prisma.viralRemake.update({
+      where: { id: remake.id },
+      data: {
+        sourceTranscriptTranslated:
+          nextTranslated as unknown as Prisma.InputJsonValue,
+        ...invalidateDubAndRenderData,
+      },
+    });
   }
 
   async reject(id: string): Promise<ViralRemake> {
