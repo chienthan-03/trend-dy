@@ -38,9 +38,12 @@ const buildFilterComplex = (segments: DubTimelineSegment[]): string => {
     .join(";");
 
   const mixInputs = ["[0:a]", ...segments.map((_, index) => `[seg${index}]`)].join("");
-  const mixStage = `${mixInputs}amix=inputs=${segments.length + 1}:duration=first:dropout_transition=0[out]`;
+  // normalize=0: default amix divides volume by input count (bed + N segs),
+  // which makes the dub almost inaudible. loudnorm restores broadcast level.
+  const mixStage = `${mixInputs}amix=inputs=${segments.length + 1}:duration=first:dropout_transition=0:normalize=0[mixed]`;
+  const loudStage = `[mixed]loudnorm=I=-16:TP=-1.5:LRA=11[out]`;
 
-  return `${delayStages};${mixStage}`;
+  return `${delayStages};${mixStage};${loudStage}`;
 };
 
 const synthesizeSilenceMp3 = async (durationSec: number): Promise<Buffer> => {
@@ -106,7 +109,8 @@ export const assembleDubTimeline = async (
   }
 
   const ffmpeg = getFfmpegPath();
-  const bitrateKbps = getSttAudioBitrateKbps();
+  // Dub preview should not reuse the ultra-low STT bitrate (often 24kbps).
+  const bitrateKbps = Math.max(getSttAudioBitrateKbps(), 128);
   const dir = await mkdtemp(join(tmpdir(), "remix-dub-assemble-"));
 
   try {

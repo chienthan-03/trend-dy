@@ -35,6 +35,7 @@ import {
   type SegmentFitPlan,
 } from "../../modules/remix/tts/segment-fit";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
+import { splitSegmentsForTts } from "../../modules/remix/tts/split-segments-for-tts";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
 import { RemixRenderService } from "../../modules/remix/remix-render.service";
@@ -662,6 +663,10 @@ export class RemixProcessor extends WorkerHost {
       voiceIdOverride || remake.ttsVoiceId || getDefaultTtsVoiceId();
     const maxSpeed = getTtsMaxSpeed();
 
+    // Coarse STT cues (few long blocks) make TTS sound like one unbroken read.
+    // Split on sentence boundaries and keep short pauses between lines.
+    const ttsSegments = splitSegmentsForTts(transcript.segments);
+
     const fitFailedIndexes: number[] = [];
     const timelineSegments: {
       startSec: number;
@@ -670,8 +675,8 @@ export class RemixProcessor extends WorkerHost {
     }[] = [];
     let ttsCostUsd = 0;
 
-    for (let index = 0; index < transcript.segments.length; index += 1) {
-      const segment = transcript.segments[index]!;
+    for (let index = 0; index < ttsSegments.length; index += 1) {
+      const segment = ttsSegments[index]!;
       const targetDurationSec = Math.max(segment.endSec - segment.startSec, 0.1);
 
       let synth = await adapter.synthesize({ text: segment.text, voiceId });
@@ -714,7 +719,7 @@ export class RemixProcessor extends WorkerHost {
       });
     }
 
-    const lastSegment = transcript.segments[transcript.segments.length - 1];
+    const lastSegment = ttsSegments[ttsSegments.length - 1];
     const totalDurationSec =
       remake.videoDurationSec ?? lastSegment?.endSec ?? transcript.durationSec;
 
@@ -749,7 +754,7 @@ export class RemixProcessor extends WorkerHost {
     });
 
     this.logger.log(
-      `remix_tts ${jobId}: dub assembled for ${remakeId} (${timelineSegments.length} segments, ${fitFailedIndexes.length} fit failures)`,
+      `remix_tts ${jobId}: dub assembled for ${remakeId} (${timelineSegments.length} clips from ${transcript.segments.length} cues, ${fitFailedIndexes.length} fit failures)`,
     );
   }
 
