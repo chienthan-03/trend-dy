@@ -34,8 +34,9 @@ import {
   planSegmentFit,
   type SegmentFitPlan,
 } from "../../modules/remix/tts/segment-fit";
+import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
+import { effectiveRole } from "../../modules/remix/tts/segment-role";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
-import { splitSegmentsForTts } from "../../modules/remix/tts/split-segments-for-tts";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
 import { RemixRenderService } from "../../modules/remix/remix-render.service";
@@ -639,9 +640,9 @@ export class RemixProcessor extends WorkerHost {
     }
 
     const remake = await this.remixService.getRemake(remakeId);
-    const transcript =
+    let translated =
       remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
-    if (!transcript) {
+    if (!translated) {
       throw new Error(
         `Remake ${remakeId} has no translated transcript for TTS`,
       );
@@ -658,14 +659,33 @@ export class RemixProcessor extends WorkerHost {
       return;
     }
 
+    if (translated.segments.some((segment) => segment.role == null)) {
+      const source = remake.sourceTranscript as RemixTranscriptV1 | null;
+      const result = source
+        ? await classifyTranslatedSegments({ source, translated, mode: "lazy" })
+        : { ok: false as const, warning: `Remake ${remakeId} has no source transcript to classify against` };
+
+      if (result.ok) {
+        translated = { ...translated, segments: result.segments };
+        await this.prisma.viralRemake.update({
+          where: { id: remakeId },
+          data: {
+            sourceTranscriptTranslated: translated as unknown as Prisma.InputJsonValue,
+            classifyWarning: null,
+          },
+        });
+      } else {
+        await this.prisma.viralRemake.update({
+          where: { id: remakeId },
+          data: { classifyWarning: result.warning },
+        });
+      }
+    }
+
     const adapter = await createTtsAdapter();
     const voiceId =
       voiceIdOverride || remake.ttsVoiceId || getDefaultTtsVoiceId();
     const maxSpeed = getTtsMaxSpeed();
-
-    // Coarse STT cues (few long blocks) make TTS sound like one unbroken read.
-    // Split on sentence boundaries and keep short pauses between lines.
-    const ttsSegments = splitSegmentsForTts(transcript.segments);
 
     const fitFailedIndexes: number[] = [];
     const timelineSegments: {
@@ -675,8 +695,10 @@ export class RemixProcessor extends WorkerHost {
     }[] = [];
     let ttsCostUsd = 0;
 
-    for (let index = 0; index < ttsSegments.length; index += 1) {
-      const segment = ttsSegments[index]!;
+    for (let index = 0; index < translated.segments.length; index += 1) {
+      const segment = translated.segments[index]!;
+      if (effectiveRole(segment) === "source") continue;
+
       const targetDurationSec = Math.max(segment.endSec - segment.startSec, 0.1);
 
       let synth = await adapter.synthesize({ text: segment.text, voiceId });
@@ -719,9 +741,9 @@ export class RemixProcessor extends WorkerHost {
       });
     }
 
-    const lastSegment = ttsSegments[ttsSegments.length - 1];
+    const lastSegment = translated.segments[translated.segments.length - 1];
     const totalDurationSec =
-      remake.videoDurationSec ?? lastSegment?.endSec ?? transcript.durationSec;
+      remake.videoDurationSec ?? lastSegment?.endSec ?? translated.durationSec;
 
     const dubBuffer = await assembleDubTimeline({
       segments: timelineSegments,
@@ -754,7 +776,7 @@ export class RemixProcessor extends WorkerHost {
     });
 
     this.logger.log(
-      `remix_tts ${jobId}: dub assembled for ${remakeId} (${timelineSegments.length} clips from ${transcript.segments.length} cues, ${fitFailedIndexes.length} fit failures)`,
+      `remix_tts ${jobId}: dub assembled for ${remakeId} (${timelineSegments.length} clips from ${translated.segments.length} cues, ${fitFailedIndexes.length} fit failures)`,
     );
   }
 

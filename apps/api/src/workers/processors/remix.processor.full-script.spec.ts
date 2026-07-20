@@ -12,6 +12,7 @@ import { transcribeAudio } from "../../ai/stt";
 import { translateTranscript } from "../../ai/translate";
 import { extractAudioForStt } from "../../modules/remix/remix-audio.util";
 import { createRemixMediaAdapter } from "../../modules/remix/remix-media.adapter";
+import { FakeTtsAdapter } from "../../modules/remix/tts/fake-tts.adapter";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 
 vi.mock("../job-status", () => ({
@@ -115,6 +116,14 @@ vi.mock("../../modules/remix/tts/shorten-segment", () => ({
   shortenSegmentText: shortenSegmentTextMock,
 }));
 
+const { classifyTranslatedSegmentsMock } = vi.hoisted(() => ({
+  classifyTranslatedSegmentsMock: vi.fn(),
+}));
+
+vi.mock("../../modules/remix/tts/classify-segments", () => ({
+  classifyTranslatedSegments: classifyTranslatedSegmentsMock,
+}));
+
 describe("RemixProcessor (Full Script Mode)", () => {
   let prisma: any;
   let jobsService: any;
@@ -125,6 +134,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    classifyTranslatedSegmentsMock.mockReset();
     process.env.REMIX_SKIP_GENERATE = "false";
     process.env.REMIX_TTS_MODE = "fake";
     delete process.env.REMIX_TTS_MAX_SPEED;
@@ -419,9 +429,9 @@ describe("RemixProcessor (Full Script Mode)", () => {
         language: "vi",
         durationSec: 10,
         segments: [
-          { startSec: 0, endSec: 2, text: "a".repeat(20) },
-          { startSec: 2, endSec: 6, text: "B".repeat(200) },
-          { startSec: 6, endSec: 10, text: "D".repeat(200) },
+          { startSec: 0, endSec: 2, text: "a".repeat(20), role: "narration", roleSource: "manual" },
+          { startSec: 2, endSec: 6, text: "B".repeat(200), role: "narration", roleSource: "manual" },
+          { startSec: 6, endSec: 10, text: "D".repeat(200), role: "narration", roleSource: "manual" },
         ],
         fullText: "full text",
         provider: "fake",
@@ -436,6 +446,9 @@ describe("RemixProcessor (Full Script Mode)", () => {
     } as unknown as BullJob;
 
     await processor.process(job);
+
+    // All roles are already set — lazy classify must not be invoked.
+    expect(classifyTranslatedSegmentsMock).not.toHaveBeenCalled();
 
     // Segment 0 fits immediately; segments 1 and 2 needed a shorten pass.
     expect(shortenSegmentText).toHaveBeenCalledTimes(2);
@@ -507,10 +520,231 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
     expect(remixStorage.putDub).not.toHaveBeenCalled();
     expect(shortenSegmentText).not.toHaveBeenCalled();
+    // Upload early-return must happen before any lazy classify call.
+    expect(classifyTranslatedSegmentsMock).not.toHaveBeenCalled();
     expect(prisma.viralRemake.update).toHaveBeenCalledWith({
       where: { id: "remake_1" },
       data: { renderPhase: "tts_ready" },
     });
+  });
+
+  it("handleTts skips source-role segments and does not sentence-split", async () => {
+    const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      videoDurationSec: 9,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 9,
+        segments: [
+          { startSec: 0, endSec: 3, text: "Xin chào", role: "narration", roleSource: "manual" },
+          { startSec: 3, endSec: 6, text: "Ố", role: "source", roleSource: "manual" },
+          { startSec: 6, endSec: 9, text: "Tạm biệt", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "Xin chào Ố Tạm biệt",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_source",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    // Only the two narration segments are synthesized; the source segment is skipped.
+    expect(synthSpy).toHaveBeenCalledTimes(2);
+    expect(classifyTranslatedSegmentsMock).not.toHaveBeenCalled();
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          dubSource: "tts",
+          ttsFitFailedIndexes: [],
+        }),
+      }),
+    );
+  });
+
+  it("handleTts records ttsFitFailedIndexes using persisted segment indexes across a source segment", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      videoDurationSec: 12,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 12,
+        segments: [
+          { startSec: 0, endSec: 2, text: "a".repeat(20), role: "narration", roleSource: "manual" },
+          { startSec: 2, endSec: 3, text: "Ố", role: "source", roleSource: "manual" },
+          { startSec: 3, endSec: 7, text: "B".repeat(200), role: "narration", roleSource: "manual" },
+          { startSec: 7, endSec: 11, text: "D".repeat(200), role: "narration", roleSource: "manual" },
+        ],
+        fullText: "full text",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_indexes",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    // Segment 1 is "source" and skipped; segment 2 fits after a shorten pass,
+    // segment 3 still fails — the failure index must reflect its position in
+    // the full (unfiltered) persisted segment list, i.e. 3, not 2.
+    expect(shortenSegmentText).toHaveBeenCalledTimes(2);
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          ttsFitFailedIndexes: [3],
+        }),
+      }),
+    );
+  });
+
+  it("handleTts invokes lazy classify when any segment role is unset", async () => {
+    classifyTranslatedSegmentsMock.mockResolvedValue({
+      ok: true,
+      segments: [
+        { startSec: 0, endSec: 3, text: "Xin chào", role: "narration", roleSource: "auto" },
+        { startSec: 3, endSec: 6, text: "Ố", role: "source", roleSource: "auto" },
+      ],
+    });
+
+    const sourceTranscript = {
+      version: 1,
+      language: "zh",
+      durationSec: 6,
+      segments: [
+        { startSec: 0, endSec: 3, text: "你好" },
+        { startSec: 3, endSec: 6, text: "啊" },
+      ],
+      fullText: "你好啊",
+      provider: "fake",
+      model: "whisper-1",
+    };
+    const translatedTranscript = {
+      version: 1,
+      language: "vi",
+      durationSec: 6,
+      segments: [
+        { startSec: 0, endSec: 3, text: "Xin chào" },
+        { startSec: 3, endSec: 6, text: "Ố" },
+      ],
+      fullText: "Xin chào Ố",
+      provider: "fake",
+      model: "fake",
+    };
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      videoDurationSec: 6,
+      sourceTranscript,
+      sourceTranscriptTranslated: translatedTranscript,
+    });
+
+    const job = {
+      id: "job_tts_lazy_classify",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(classifyTranslatedSegmentsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: sourceTranscript,
+        translated: translatedTranscript,
+        mode: "lazy",
+      }),
+    );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          sourceTranscriptTranslated: expect.objectContaining({
+            segments: [
+              expect.objectContaining({ role: "narration" }),
+              expect.objectContaining({ role: "source" }),
+            ],
+          }),
+          classifyWarning: null,
+        }),
+      }),
+    );
+  });
+
+  it("handleTts proceeds with default narration roles when lazy classify fails", async () => {
+    classifyTranslatedSegmentsMock.mockResolvedValue({
+      ok: false,
+      warning: "classify failed",
+    });
+    const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      videoDurationSec: 6,
+      sourceTranscript: {
+        version: 1,
+        language: "zh",
+        durationSec: 6,
+        segments: [
+          { startSec: 0, endSec: 3, text: "你好" },
+          { startSec: 3, endSec: 6, text: "啊" },
+        ],
+        fullText: "你好啊",
+        provider: "fake",
+        model: "whisper-1",
+      },
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 6,
+        segments: [
+          { startSec: 0, endSec: 3, text: "Xin chào" },
+          { startSec: 3, endSec: 6, text: "Ố" },
+        ],
+        fullText: "Xin chào Ố",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_classify_fail",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    // effectiveRole defaults unset roles to "narration", so both segments are synthesized.
+    expect(synthSpy).toHaveBeenCalledTimes(2);
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { classifyWarning: "classify failed" },
+      }),
+    );
   });
 
   it("remix_tts failure only marks renderPhase/renderError, not the script pipeline", async () => {
