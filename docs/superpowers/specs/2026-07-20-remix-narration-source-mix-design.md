@@ -4,7 +4,9 @@
 **Date:** 2026-07-20  
 **Audience:** Engineering, AI, product — internal studio tool  
 **Depends on:** [Remix Dub + Letterbox Render](./2026-07-17-remix-dub-render-design.md)  
-**Problem trigger:** Editors reported quiet/continuous TTS and, more critically, TTS reading **film character dialogue** in the reviewer voice, causing rushed timing vs the source video.
+**Supersedes (partial):** Parent design’s `audio_only` / `banner_audio` wording that **fully replaces** the soundtrack with VI dub. For the **TTS** path, output is a **mix**: original audio on `source` windows, VI TTS on `narration` windows. The **upload-dub** path still fully replaces audio (roles ignored).  
+
+**Problem trigger:** TTS was reading film character dialogue in the reviewer voice, rushing timing vs the source video.
 
 ---
 
@@ -28,10 +30,10 @@ Today every translated segment is TTS’d and the render **replaces** the whole 
 ### Goals
 
 - Auto-**classify** each transcript segment as `narration` | `source`  
-- Allow editors to **override** role per segment in Remake Studio  
+- Allow editors to **override** role per segment in Remake Studio (**manual overrides survive re-classify**)  
 - **TTS only** `narration` segments (segment-synced to STT timings)  
-- **Render mix:** original video audio in `source` windows; VI TTS in `narration` windows (with light ducking of original under TTS)  
-- Works for both `audio_only` and `banner_audio` render modes  
+- **Render mix:** original video audio outside / on `source` windows; VI TTS on `narration` windows (duck original under TTS)  
+- Works for both `audio_only` and `banner_audio` when `dubSource === "tts"`  
 - Re-classify action without re-running full STT  
 
 ### Non-goals (MVP)
@@ -39,7 +41,7 @@ Today every translated segment is TTS’d and the render **replaces** the whole 
 - Speaker diarization models / multi-speaker ID  
 - Voice cloning  
 - Perfect music stem separation  
-- Changing ZIP package export semantics beyond optional role metadata  
+- Role metadata in ZIP export  
 - Upload-dub path: keep **full replace** (ignore roles) as today  
 
 ---
@@ -48,35 +50,40 @@ Today every translated segment is TTS’d and the render **replaces** the whole 
 
 | Decision | Value |
 |---|---|
-| Source windows | **Keep original audio** (user choice #1) |
-| Narration windows | VI TTS (existing providers) |
-| Classification | **Automatic + manual override** (Approach A) |
-| Default if unclassified | `narration` (safe for non-review content) |
-| Sentence re-split before TTS | **Off by default** for this flow (was causing wrong breaks); optional later |
-| Upload dub override | Full track replace; roles ignored |
-| Ducking | Original audio lowered under narration windows; full level on `source` |
+| Source windows | **Keep original audio** |
+| Narration windows | VI TTS |
+| Classification | Automatic + manual override |
+| Default if `role` unset | `narration` |
+| Sentence re-split before TTS | **Disabled** on this path (must ship with role skip; do not leave `splitSegmentsForTts` always-on) |
+| Upload dub override | Full track replace; roles ignored at render |
+| Ducking | Original lowered only during **narration** intervals; **everywhere else** original at 1.0 (including gaps between cues) |
+| Duck gain | Env `REMIX_DUCK_GAIN` default `0.2` (linear) |
+| Role change | Invalidates dub + render (force re-TTS before Render) |
 
 ---
 
 ## 4. Data model
 
-Extend shared transcript segment:
-
 ```ts
 export type RemixSegmentRole = "narration" | "source";
+export type RemixSegmentRoleSource = "auto" | "manual";
 
 export type RemixTranscriptSegment = {
   startSec: number;
   endSec: number;
   text: string;
-  /** Absent / undefined → treat as narration */
+  /** Absent → treat as narration for TTS/render */
   role?: RemixSegmentRole;
+  /** Absent → treat as auto for re-classify eligibility */
+  roleSource?: RemixSegmentRoleSource;
 };
 ```
 
-- Persist on `ViralRemake.sourceTranscriptTranslated` (JSON).  
-- Optionally stamp the same `role` onto `sourceTranscript` by index for debugging; **source of truth for TTS/render = translated transcript**.  
-- No Prisma migration required (JSON field already exists).
+- **Source of truth for TTS/render:** `ViralRemake.sourceTranscriptTranslated`.  
+- Do **not** read roles from `sourceTranscript` for TTS/render (optional debug stamp only).  
+- No Prisma migration (JSON field).
+
+Optional remake field `classifyWarning: string | null` (Prisma optional string or reuse a JSON soft-warning slot). Classify API returns the same warning for Studio toast; **persist on remake** so GET remake shows it after refresh.
 
 ---
 
@@ -84,90 +91,121 @@ export type RemixTranscriptSegment = {
 
 ### When
 
-- After translate succeeds (hook in `remix_translate` completion **or** lazy on first `remix_tts` if any segment lacks `role`).  
-- Explicit **Re-classify** API/UI action overwrites roles (respect: only auto-filled ones vs all — MVP: overwrite all auto; manual flag optional later; MVP simpler: overwrite all then editor re-fixes).
+- After translate succeeds **or** lazily on first `remix_tts` for segments with `role == null`.  
+- Explicit **Re-classify** API/UI.
 
-### How (MVP)
+### Pairing
 
-1. Light heuristics (optional pre-hints): residual Chinese-heavy text, very short exclamations, etc.  
-2. One LLM call (batch by index) with system rules:
-   - `narration` = reviewer explaining / summarizing  
-   - `source` = in-universe character dialogue, on-screen film speech, non-reviewer lines  
-3. Write `role` onto each segment; log counts.
+- Classify using **paired** `sourceTranscript[i]` + `sourceTranscriptTranslated[i]` (same index).  
+- If segment **counts differ**, reject classify with `classifyWarning` (same as bad LLM parse).  
+- Persist `role` / `roleSource: "auto"` only on **translated** segments.
 
-### Cost / failure
+### Overwrite rules
 
-- On classify failure: leave unset (= narration) and surface warning; do not fail the whole remake.  
-- Budget: use existing remix LLM model / small batch size.
+| Action | Touches |
+|---|---|
+| Lazy fill | Only segments with `role == null` |
+| Re-classify | Only `roleSource !== "manual"` (and null) |
+| Editor toggle | Sets `role` + `roleSource: "manual"` |
+
+### Failure
+
+- LLM wrong count / bad indexes → **reject entire parse**; leave roles unchanged; set `classifyWarning`.  
+- Do not partial-apply silently.  
+- Unset roles still behave as narration at TTS time.
+
+### Re-STT / re-translate
+
+- Clears roles on translated transcript (and clears dub + render keys / phases as existing regenerate paths do).
 
 ---
 
-## 6. TTS job (`remix_tts`)
+## 6. TTS job (`remix_tts`) — ordered steps
 
 1. Load translated transcript.  
-2. Ensure roles (run classify if missing).  
-3. For each segment:
-   - `narration` → synthesize + fit into `[startSec, endSec]` (existing pad/speed/shorten).  
-   - `source` → **skip**; leave silence on dub track for that window.  
-4. Assemble dub timeline (adelay + amix + loudnorm) as today.  
-5. Persist `mediaDubAudioKey`, `ttsCostUsd`, fit failures (indices among **narration** attempts).
+2. Ensure roles: lazy-classify only `role == null` segments.  
+3. **Do not** call `splitSegmentsForTts` on this path.  
+4. For each **persisted** translated segment (stable Studio index `i`):
+   - Effective role = `segment.role ?? "narration"`.  
+   - `narration` → synthesize + fit into `[startSec, endSec]`; on fit failure record **`i`** in `ttsFitFailedIndexes`.  
+   - `source` → skip (silence on dub for that window).  
+5. Assemble dub (adelay + amix `normalize=0` + loudnorm on **dub only**).  
+6. Persist `mediaDubAudioKey`, `ttsCostUsd`, `ttsFitFailedIndexes`, `renderPhase=tts_ready`.
 
-Do **not** sentence-split narration by default in this path (revisit only if STT cues are single mega-segments).
+If **all** segments are `source`: dub ≈ silence; still `tts_ready` (render will ≈ original audio).
 
 ---
 
 ## 7. Render mix
 
-Replace “discard original audio” with a **two-track mix**:
+### When `dubSource === "upload"`
 
-Inputs:
+- **Full audio replace** with uploaded dub (current behavior).  
+- **Do not** apply role envelope even if roles exist.
 
-- Video file (picture + original audio)  
-- Dub MP3 (TTS in narration windows, silence elsewhere)  
-- Role timeline from translated transcript (list of narration intervals)
+### When `dubSource === "tts"` (or tts-produced key)
 
-FFmpeg sketch:
+1. Video + original audio.  
+2. Dub MP3 (TTS in narration windows, silence elsewhere).  
+3. Narration intervals from translated roles (`role ?? "narration"`); merge adjacent/overlapping intervals; ignore zero-length.  
+4. Duck original to `REMIX_DUCK_GAIN` **only** on those intervals; else gain `1.0`.  
+5. `amix` ducked original + dub (`normalize=0`). **No** post-mix loudnorm (preserve duck).  
+6. Mux with picture (`audio_only`) or after letterbox filters (`banner_audio`).
 
-1. Extract/map original audio.  
-2. Build a **volume envelope** (or `volume` + `enable`/`between`) so original is:
-   - `duckGain` (e.g. 0.15–0.25) during narration intervals  
-   - `1.0` during source / non-narration  
-3. `amix` ducked original + dub (`normalize=0`), then optional loudnorm.  
-4. Mux with video (`audio_only`) or after letterbox video filter (`banner_audio`).
+### Edge cases
 
-Upload-dub path: if `dubSource === "upload"`, keep current full audio replace (no role mix).
+| Case | Behavior |
+|---|---|
+| No audio stream on video | Fail render with clear error |
+| All `source` | Mix ≈ original |
+| All `narration` | Original continuously ducked under TTS |
+| STT missed a spoken line | Original may still leak in gaps (accepted MVP risk) |
 
 ---
 
-## 8. API / UI
+## 8. Invalidation
+
+Any of the following **always** clears `mediaDubAudioKey` and `renderOutputKey`, and sets `renderPhase` to `idle`:
+
+- Segment role toggle  
+- Successful classify / re-classify that changes any role  
+- Re-translate / re-STT  
+
+Studio: disable **Render preview** until TTS has produced `tts_ready` / `render_ready` again after role edits.
+
+---
+
+## 9. API / UI
 
 ### API
 
-- `PATCH` remake / transcript update: allow updating segment `role` (or dedicated `PATCH .../transcript/roles`).  
-- `POST .../classify-segments` → re-run classification, return updated remake/transcript.  
-- Existing `POST .../tts` and `POST .../render` consume stored roles.
+- Update segment roles (PATCH remake transcript or `PATCH .../transcript/roles`) with invalidation.  
+- `POST .../classify-segments` → re-classify per overwrite rules; returns transcript + optional `warning`.  
+- Existing TTS / render endpoints unchanged in shape.
 
 ### Remake Studio
 
-- Transcript panel (or Video output adjacent list): each line shows badge **Review** | **Giữ gốc**; click to toggle.  
-- Action **Phân loại lại**.  
-- Copy near TTS: “Chỉ đọc dòng Review; dòng Giữ gốc dùng tiếng gốc.”
+- Per line: badge **Review** | **Giữ gốc**; toggle → manual.  
+- **Phân loại lại**.  
+- Hint: “Chỉ đọc dòng Review; dòng Giữ gốc giữ tiếng gốc.”  
+- Show `classifyWarning` if present.
 
 ---
 
-## 9. Testing
+## 10. Testing
 
-- Unit: classify parser; volume envelope builder from intervals; TTS skips `source`.  
-- Integration: render mix keeps energy in a `source`-only window when dub is silent there.  
-- Spec/UI: role toggle round-trips via API.
+- Unit: role effective default; re-classify skips manual; envelope builder; TTS skips `source`; fit failure indexes = persisted indices.  
+- Integration: `source`-only window keeps original energy when dub silent; upload path ignores envelope.  
+- UI/API: role toggle invalidates dub.
 
 ---
 
-## 10. Rollout
+## 11. Rollout (single ship)
 
-1. Shared type + classify + TTS skip  
-2. Render mix + ducking  
-3. Studio role UI + re-classify  
-4. Soft-disable default sentence-split for live TTS path  
+1. Shared types (`role`, `roleSource`)  
+2. Classify + overwrite rules + warning  
+3. TTS skip `source` + **remove default sentence-split** on TTS path  
+4. Render mix + duck + upload bypass  
+5. Studio badges + re-classify + invalidation  
 
-No DB migration. Restart API/worker after deploy; editors re-run **Phân loại** (or first TTS) then **Tạo audio VI** + **Render preview**.
+Restart API/worker; editors: Phân loại (or first TTS) → Tạo audio VI → Render preview.
