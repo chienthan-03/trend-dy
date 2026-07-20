@@ -809,17 +809,7 @@ export class RemixProcessor extends WorkerHost {
     ]);
 
     let renderedBuffer: Buffer;
-    if (remake.dubSource === "upload") {
-      // Uploaded dub fully replaces the source audio track.
-      renderedBuffer =
-        remake.renderMode === "banner_audio"
-          ? await this.remixRender.renderBannerAudio(
-              videoBuffer,
-              dubBuffer,
-              remake.bannerJson as RemixBannerJson,
-            )
-          : await this.remixRender.renderAudioOnly(videoBuffer, dubBuffer);
-    } else {
+    if (remake.dubSource === "tts") {
       // TTS dub only covers narration windows — mix it under the original
       // audio and duck the original during those windows.
       const translated =
@@ -841,6 +831,16 @@ export class RemixProcessor extends WorkerHost {
               dubBuffer,
               narrationIntervals,
             );
+    } else {
+      // Upload dub, or legacy rows with null dubSource — full replace.
+      renderedBuffer =
+        remake.renderMode === "banner_audio"
+          ? await this.remixRender.renderBannerAudio(
+              videoBuffer,
+              dubBuffer,
+              remake.bannerJson as RemixBannerJson,
+            )
+          : await this.remixRender.renderAudioOnly(videoBuffer, dubBuffer);
     }
 
     const renderOutputKey = await this.remixStorage.putRender(

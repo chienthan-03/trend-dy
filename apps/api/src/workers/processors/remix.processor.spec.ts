@@ -333,6 +333,30 @@ describe("RemixProcessor", () => {
     });
   });
 
+  it("remix_render (dubSource=null) uses full replace for legacy remakes", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "audio_only",
+      dubSource: null,
+    });
+
+    const job = {
+      id: "job_render_legacy",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(remixRender.renderAudioOnly).toHaveBeenCalledWith(
+      Buffer.from("video"),
+      Buffer.from("dub"),
+    );
+    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
+  });
+
   it("remix_render (dubSource=tts) mixes original audio with merged narration intervals and marks render_ready", async () => {
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
