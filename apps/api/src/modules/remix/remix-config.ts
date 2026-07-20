@@ -190,6 +190,13 @@ export const getLetterboxRatio = (): number => {
 export const getRenderFontPath = (): string | undefined =>
   process.env.REMIX_RENDER_FONT_PATH?.trim() || undefined;
 
+/** How far the original audio ducks under narration windows (0.05–1, default 0.2). */
+export const getDuckGain = (): number => {
+  const n = Number(process.env.REMIX_DUCK_GAIN ?? "0.2");
+  if (!Number.isFinite(n)) return 0.2;
+  return Math.min(1, Math.max(0.05, n));
+};
+
 export type SttResponseFormat = "verbose_json" | "json";
 
 export const getSttResponseFormat = (): SttResponseFormat => {

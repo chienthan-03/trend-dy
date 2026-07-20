@@ -179,6 +179,48 @@ export const probeVideoDimensions = async (
   }
 };
 
+/** Probe whether the source video has at least one audio stream. */
+export const probeHasAudioStream = async (videoBuffer: Buffer): Promise<boolean> => {
+  const ffprobe = getFfprobePath();
+  const dir = await mkdtemp(join(tmpdir(), "remix-audio-stream-probe-"));
+  const inputPath = join(dir, "input.mp4");
+
+  try {
+    await writeFile(inputPath, videoBuffer);
+    return await new Promise<boolean>((resolve) => {
+      const proc = spawn(
+        ffprobe,
+        [
+          "-v",
+          "error",
+          "-select_streams",
+          "a",
+          "-show_entries",
+          "stream=index",
+          "-of",
+          "csv=p=0",
+          inputPath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+
+      let stdout = "";
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      proc.on("error", () => resolve(false));
+      proc.on("close", (code) => {
+        resolve(code === 0 && stdout.trim().length > 0);
+      });
+    });
+  } catch {
+    return false;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
 /** Convert WAV (or other non-MP3 audio) to MP3 for dub storage. */
 export const convertWavToMp3 = async (wavBuffer: Buffer): Promise<Buffer> => {
   if (getTtsMode() === "fake") {

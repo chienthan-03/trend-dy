@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
   assertFullScriptAllowed,
+  getDuckGain,
   getLetterboxRatio,
   getMediaDownloadTimeoutMs,
   getRemixScriptMode,
@@ -109,5 +110,28 @@ describe("remix-config", () => {
   it("reads render font path from env", () => {
     process.env.REMIX_RENDER_FONT_PATH = "/fonts/Roboto-Bold.ttf";
     expect(getRenderFontPath()).toBe("/fonts/Roboto-Bold.ttf");
+  });
+
+  it("defaults duck gain to 0.2", () => {
+    delete process.env.REMIX_DUCK_GAIN;
+    expect(getDuckGain()).toBe(0.2);
+  });
+
+  it("reads duck gain from env", () => {
+    process.env.REMIX_DUCK_GAIN = "0.3";
+    expect(getDuckGain()).toBe(0.3);
+  });
+
+  it("clamps duck gain to the 0.05–1 range", () => {
+    process.env.REMIX_DUCK_GAIN = "0";
+    expect(getDuckGain()).toBe(0.05);
+
+    process.env.REMIX_DUCK_GAIN = "2";
+    expect(getDuckGain()).toBe(1);
+  });
+
+  it("falls back to default duck gain for invalid values", () => {
+    process.env.REMIX_DUCK_GAIN = "not-a-number";
+    expect(getDuckGain()).toBe(0.2);
   });
 });

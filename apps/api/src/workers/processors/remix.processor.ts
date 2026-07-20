@@ -35,7 +35,7 @@ import {
   type SegmentFitPlan,
 } from "../../modules/remix/tts/segment-fit";
 import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
-import { effectiveRole } from "../../modules/remix/tts/segment-role";
+import { effectiveRole, mergeNarrationIntervals } from "../../modules/remix/tts/segment-role";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
@@ -808,14 +808,40 @@ export class RemixProcessor extends WorkerHost {
       this.remixStorage.getDub(remake.mediaDubAudioKey),
     ]);
 
-    const renderedBuffer =
-      remake.renderMode === "banner_audio"
-        ? await this.remixRender.renderBannerAudio(
-            videoBuffer,
-            dubBuffer,
-            remake.bannerJson as RemixBannerJson,
-          )
-        : await this.remixRender.renderAudioOnly(videoBuffer, dubBuffer);
+    let renderedBuffer: Buffer;
+    if (remake.dubSource === "upload") {
+      // Uploaded dub fully replaces the source audio track.
+      renderedBuffer =
+        remake.renderMode === "banner_audio"
+          ? await this.remixRender.renderBannerAudio(
+              videoBuffer,
+              dubBuffer,
+              remake.bannerJson as RemixBannerJson,
+            )
+          : await this.remixRender.renderAudioOnly(videoBuffer, dubBuffer);
+    } else {
+      // TTS dub only covers narration windows — mix it under the original
+      // audio and duck the original during those windows.
+      const translated =
+        remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
+      const narrationIntervals = mergeNarrationIntervals(
+        translated?.segments ?? [],
+      );
+
+      renderedBuffer =
+        remake.renderMode === "banner_audio"
+          ? await this.remixRender.renderBannerAudioMix(
+              videoBuffer,
+              dubBuffer,
+              remake.bannerJson as RemixBannerJson,
+              narrationIntervals,
+            )
+          : await this.remixRender.renderAudioMix(
+              videoBuffer,
+              dubBuffer,
+              narrationIntervals,
+            );
+    }
 
     const renderOutputKey = await this.remixStorage.putRender(
       remakeId,
