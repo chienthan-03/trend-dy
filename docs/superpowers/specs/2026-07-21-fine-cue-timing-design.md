@@ -1,6 +1,6 @@
 # Fine Cue Timing (SRT-style STT → TTS) — Design
 
-**Status:** Draft (pending implementation planning)  
+**Status:** Approved for implementation planning  
 **Date:** 2026-07-21  
 **Audience:** Engineering, AI, product — internal studio tool  
 **Depends on:** [Remix Dub + Letterbox Render](./2026-07-17-remix-dub-render-design.md), [Remix Narration vs Source Audio Mix](./2026-07-20-remix-narration-source-mix-design.md)  
