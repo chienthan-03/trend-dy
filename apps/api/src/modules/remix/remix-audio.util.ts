@@ -390,6 +390,51 @@ export const compressAudioBufferForStt = async (
   }
 };
 
+/** Slice a timeline window from source audio into a compact mono MP3 for STT. */
+export const sliceAudioWindowForStt = async (
+  audioBuffer: Buffer,
+  startSec: number,
+  durationSec: number,
+): Promise<Buffer> => {
+  if (process.env.REMIX_STT_MODE === "fake") {
+    return audioBuffer;
+  }
+
+  const ffmpeg = getFfmpegPath();
+  const bitrateKbps = getSttAudioBitrateKbps();
+  const dir = await mkdtemp(join(tmpdir(), "remix-audio-slice-"));
+  const inputPath = join(dir, "input.audio");
+  const outputPath = join(dir, "output.mp3");
+
+  try {
+    await writeFile(inputPath, audioBuffer);
+    await runFfmpeg(ffmpeg, [
+      "-y",
+      "-ss",
+      Math.max(startSec, 0).toFixed(3),
+      "-t",
+      Math.max(durationSec, 0.1).toFixed(3),
+      "-i",
+      inputPath,
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-codec:a",
+      "libmp3lame",
+      "-b:a",
+      `${bitrateKbps}k`,
+      "-f",
+      "mp3",
+      outputPath,
+    ]);
+    return await readFile(outputPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
 /** Split large MP3 into time-based chunks for Whisper's 25 MB upload cap. */
 export const splitMp3ForStt = async (
   mp3Buffer: Buffer,

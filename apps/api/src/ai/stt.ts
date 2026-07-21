@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { RemixTranscriptV1 } from "@factory/shared";
+import type { RemixTranscriptV1, RemixTranscriptWord } from "@factory/shared";
 import {
   getSttMaxUploadMb,
   getSttApiBaseUrl,
@@ -11,13 +11,28 @@ import {
 } from "../modules/remix/remix-config";
 import {
   compressAudioBufferForStt,
+  sliceAudioWindowForStt,
   splitMp3ForStt,
 } from "../modules/remix/remix-audio.util";
+import { buildSegmentsFromPlainText } from "./plain-text-segments";
+import {
+  detectCoarseTiming,
+  normalizeCueTiming,
+} from "../modules/remix/tts/normalize-cue-timing";
 
 export type TranscribeAudioResult = {
   transcript: RemixTranscriptV1;
   costUsd: number;
+  timingDegraded?: boolean;
+  timingCoarse?: boolean;
 };
+
+export type TranscribeWordsResult = {
+  words: RemixTranscriptWord[];
+  costUsd: number;
+};
+
+export { buildSegmentsFromPlainText } from "./plain-text-segments";
 
 const FAKE_CHINESE_LINES = [
   "这是一个测试片段。",
@@ -42,6 +57,11 @@ type WhisperJson = {
     start: number;
     end: number;
     text: string;
+  }>;
+  words?: Array<{
+    word: string;
+    start: number;
+    end: number;
   }>;
 };
 
@@ -78,102 +98,10 @@ const estimateAudioDurationSec = (audioBuffer: Buffer): number => {
   return Math.max(1, (audioBuffer.length - 44) / (16000 * 2));
 };
 
-/** Soft cap so plain-text fallback still yields TTS-sized cue windows. */
-const PLAIN_TEXT_MAX_CHARS = 48;
-
-const splitPlainTextPhrases = (text: string): string[] => {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-
-  const bySentence = trimmed
-    .split(/(?<=[。！？.!?])\s*|\n+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  const seeds = bySentence.length > 0 ? bySentence : [trimmed];
-  const phrases: string[] = [];
-
-  for (const seed of seeds) {
-    if (seed.length <= PLAIN_TEXT_MAX_CHARS) {
-      phrases.push(seed);
-      continue;
-    }
-
-    // Chinese Whisper often returns space/comma-separated phrases without 。！？
-    const byPause = seed
-      .split(/(?<=[，、；;,])\s*|\s+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    const chunks = byPause.length > 1 ? byPause : [seed];
-    let buffer = "";
-
-    for (const chunk of chunks) {
-      if (!buffer) {
-        buffer = chunk;
-        continue;
-      }
-      if (`${buffer}${chunk}`.length <= PLAIN_TEXT_MAX_CHARS) {
-        buffer = `${buffer}${/[，、；;,\s]$/.test(buffer) ? "" : " "}${chunk}`.trim();
-        continue;
-      }
-      phrases.push(buffer);
-      buffer = chunk;
-    }
-
-    if (buffer) phrases.push(buffer);
-  }
-
-  // Final hard wrap for unbroken CJK runs.
-  return phrases.flatMap((phrase) => {
-    if (phrase.length <= PLAIN_TEXT_MAX_CHARS) return [phrase];
-    const parts: string[] = [];
-    for (let i = 0; i < phrase.length; i += PLAIN_TEXT_MAX_CHARS) {
-      parts.push(phrase.slice(i, i + PLAIN_TEXT_MAX_CHARS));
-    }
-    return parts;
-  });
-};
-
-export const buildSegmentsFromPlainText = (
-  text: string,
-  durationSec: number,
-  timeOffsetSec = 0,
-): Array<{ startSec: number; endSec: number; text: string }> => {
-  const sentences = splitPlainTextPhrases(text);
-  if (sentences.length === 0) {
-    return [];
-  }
-
-  const totalChars = sentences.reduce((sum, sentence) => sum + sentence.length, 0) || 1;
-  let cursor = 0;
-
-  return sentences.map((sentence, index) => {
-    const weight = sentence.length / totalChars;
-    const span = durationSec * weight;
-    const startSec = timeOffsetSec + cursor;
-    const endSec =
-      index === sentences.length - 1
-        ? timeOffsetSec + durationSec
-        : timeOffsetSec + cursor + span;
-    cursor += span;
-
-    return {
-      startSec: Math.round(startSec * 100) / 100,
-      endSec: Math.round(endSec * 100) / 100,
-      text: sentence,
-    };
-  });
-};
-
-const shouldResplitMegaSegment = (
-  segments: Array<{ startSec: number; endSec: number; text: string }>,
-): boolean => {
-  if (segments.length !== 1) return false;
-  const only = segments[0]!;
-  const span = only.endSec - only.startSec;
-  // One cue covering a long window cannot drive per-line dub sync.
-  return span >= 20 && only.text.trim().length >= 40;
+export type MapWhisperResult = {
+  transcript: RemixTranscriptV1;
+  timingDegraded: boolean;
+  timingCoarse: boolean;
 };
 
 export const mapWhisperResponseToTranscript = (
@@ -183,7 +111,24 @@ export const mapWhisperResponseToTranscript = (
   languageHint?: string,
   timeOffsetSec = 0,
   fallbackDurationSec?: number,
-): RemixTranscriptV1 => {
+): RemixTranscriptV1 =>
+  mapWhisperResponseDetailed(
+    payload,
+    model,
+    provider,
+    languageHint,
+    timeOffsetSec,
+    fallbackDurationSec,
+  ).transcript;
+
+export const mapWhisperResponseDetailed = (
+  payload: WhisperJson,
+  model: string,
+  provider: string,
+  languageHint?: string,
+  timeOffsetSec = 0,
+  fallbackDurationSec?: number,
+): MapWhisperResult => {
   let segments = (payload.segments ?? [])
     .map((segment) => ({
       startSec: segment.start + timeOffsetSec,
@@ -201,24 +146,54 @@ export const mapWhisperResponseToTranscript = (
 
   if (segments.length === 0 && fullText) {
     segments = buildSegmentsFromPlainText(fullText, durationSec, timeOffsetSec);
-  } else if (shouldResplitMegaSegment(segments)) {
-    // Provider returned one cue spanning the whole clip — unusable for dub sync.
-    const only = segments[0]!;
-    segments = buildSegmentsFromPlainText(
-      only.text || fullText,
-      only.endSec - only.startSec,
-      only.startSec,
-    );
   }
 
-  return {
+  const words = (payload.words ?? [])
+    .map((word) => ({
+      startSec: word.start + timeOffsetSec,
+      endSec: word.end + timeOffsetSec,
+      text: word.word.trim(),
+    }))
+    .filter(
+      (word) =>
+        word.text.length > 0 &&
+        Number.isFinite(word.startSec) &&
+        Number.isFinite(word.endSec) &&
+        word.endSec > word.startSec,
+    );
+
+  const normalized = normalizeCueTiming({
+    segments:
+      segments.length > 0
+        ? segments
+        : fullText
+          ? [{ startSec: timeOffsetSec, endSec: timeOffsetSec + durationSec, text: fullText }]
+          : [],
+    words,
+    durationSec: timeOffsetSec + durationSec,
+  });
+
+  const transcript: RemixTranscriptV1 = {
     version: 1,
     language: payload.language ?? languageHint ?? "unknown",
     durationSec: timeOffsetSec + durationSec,
-    segments,
+    segments: normalized.segments,
     fullText,
     provider,
     model,
+    ...(words.length > 0 ? { words } : {}),
+  };
+
+  const timingCoarse = detectCoarseTiming({
+    segments: normalized.segments,
+    durationSec: transcript.durationSec,
+    degraded: normalized.degraded,
+  });
+
+  return {
+    transcript,
+    timingDegraded: normalized.degraded,
+    timingCoarse,
   };
 };
 
@@ -240,6 +215,7 @@ const mergeTranscripts = (
   provider: string,
 ): RemixTranscriptV1 => {
   const segments = parts.flatMap((part) => part.segments);
+  const words = parts.flatMap((part) => part.words ?? []);
   const durationSec = segments.length > 0 ? segments[segments.length - 1]!.endSec : 0;
 
   return {
@@ -250,6 +226,7 @@ const mergeTranscripts = (
     fullText: segments.map((segment) => segment.text).join(""),
     provider,
     model,
+    ...(words.length > 0 ? { words } : {}),
   };
 };
 
@@ -323,6 +300,7 @@ const transcribeWithOpenAi = async (
 
     if (responseFormat === "verbose_json") {
       form.append("timestamp_granularities[]", "segment");
+      form.append("timestamp_granularities[]", "word");
     }
 
     if (languageHint) {
@@ -336,6 +314,7 @@ const transcribeWithOpenAi = async (
     });
   };
 
+  let usedJsonFallback = false;
   let response = await requestTranscription(preferredFormat);
   if (
     !response.ok &&
@@ -343,6 +322,7 @@ const transcribeWithOpenAi = async (
     (response.status === 400 || response.status === 422)
   ) {
     // Some gateway providers reject verbose_json — fall back to plain text.
+    usedJsonFallback = true;
     response = await requestTranscription("json");
   }
 
@@ -352,7 +332,7 @@ const transcribeWithOpenAi = async (
   }
 
   const payload = (await response.json()) as WhisperJson;
-  const transcript = mapWhisperResponseToTranscript(
+  const mapped = mapWhisperResponseDetailed(
     payload,
     model,
     provider,
@@ -362,8 +342,12 @@ const transcribeWithOpenAi = async (
   );
 
   return {
-    transcript,
-    costUsd: estimateSttCostUsd(transcript.durationSec - timeOffsetSec),
+    transcript: mapped.transcript,
+    costUsd: estimateSttCostUsd(
+      mapped.transcript.durationSec - timeOffsetSec,
+    ),
+    timingDegraded: mapped.timingDegraded || usedJsonFallback,
+    timingCoarse: mapped.timingCoarse || usedJsonFallback,
   };
 };
 
@@ -380,11 +364,13 @@ const transcribeChunkedMp3 = async (
   const parts: RemixTranscriptV1[] = [];
   let totalCostUsd = 0;
   let timeOffsetSec = 0;
+  let timingDegraded = false;
 
   for (const chunk of chunks) {
     const result = await transcribeWithOpenAi(chunk, languageHint, timeOffsetSec);
     parts.push(result.transcript);
     totalCostUsd += result.costUsd;
+    timingDegraded = timingDegraded || Boolean(result.timingDegraded);
 
     const chunkDuration =
       result.transcript.segments.length > 0
@@ -394,9 +380,28 @@ const transcribeChunkedMp3 = async (
     timeOffsetSec += chunkDuration;
   }
 
+  const merged = mergeTranscripts(parts, model, provider);
+  const renormalized = normalizeCueTiming({
+    segments: merged.segments,
+    words: merged.words ?? [],
+    durationSec: merged.durationSec,
+  });
+  timingDegraded = timingDegraded || renormalized.degraded;
+  const transcript: RemixTranscriptV1 = {
+    ...merged,
+    segments: renormalized.segments,
+  };
+  const timingCoarse = detectCoarseTiming({
+    segments: transcript.segments,
+    durationSec: transcript.durationSec,
+    degraded: timingDegraded,
+  });
+
   return {
-    transcript: mergeTranscripts(parts, model, provider),
+    transcript,
     costUsd: totalCostUsd,
+    timingDegraded,
+    timingCoarse,
   };
 };
 
@@ -424,4 +429,56 @@ export const transcribeAudio = async (
   }
 
   return transcribeWithOpenAi(prepared, opts?.languageHint);
+};
+
+/**
+ * Word-level timestamps for a timeline window — used when silencedetect cannot
+ * find film-dialogue beds (they are loud speech, not silence).
+ */
+export const transcribeWordsInWindow = async (input: {
+  audioBuffer: Buffer;
+  windowStartSec: number;
+  windowEndSec: number;
+  languageHint?: string;
+}): Promise<TranscribeWordsResult> => {
+  const durationSec = Math.max(
+    input.windowEndSec - input.windowStartSec,
+    0.1,
+  );
+
+  if (isFakeSttMode()) {
+    // Deterministic fake words with a mid-window gap for unit/integration tests.
+    const mid = input.windowStartSec + durationSec * 0.4;
+    return {
+      words: [
+        {
+          startSec: input.windowStartSec + 0.1,
+          endSec: mid - 1,
+          text: "前",
+        },
+        {
+          startSec: mid + 1,
+          endSec: input.windowEndSec - 0.1,
+          text: "后",
+        },
+      ],
+      costUsd: 0,
+    };
+  }
+
+  const sliced = await sliceAudioWindowForStt(
+    input.audioBuffer,
+    input.windowStartSec,
+    durationSec,
+  );
+  const result = await transcribeWithOpenAi(
+    sliced,
+    input.languageHint,
+    input.windowStartSec,
+  );
+
+  return {
+    words: result.transcript.words ?? [],
+    costUsd: result.costUsd,
+  };
 };

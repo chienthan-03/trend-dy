@@ -698,8 +698,24 @@ export const translateTranscript = async (
       .join(" ")
       .trim();
 
+  /** Hard-fail on count mismatch; always copy start/end from source (1:1 cues). */
+  const lockTiming = (
+    segments: RemixTranscriptV1["segments"],
+  ): RemixTranscriptV1["segments"] => {
+    if (segments.length !== source.segments.length) {
+      throw new Error(
+        `Translate segment count mismatch: source=${source.segments.length} translated=${segments.length}`,
+      );
+    }
+    return source.segments.map((sourceSeg, index) => ({
+      ...segments[index]!,
+      startSec: sourceSeg.startSec,
+      endSec: sourceSeg.endSec,
+    }));
+  };
+
   if (resolveTranslateMode() === "fake") {
-    const segments = await translateWithMachineProviders(source);
+    const segments = lockTiming(await translateWithMachineProviders(source));
     const fullText = joinFullText(segments);
 
     return {
@@ -716,7 +732,9 @@ export const translateTranscript = async (
   }
 
   if (getTranslateProvider() === "llm") {
-    const { segments, tokensIn, tokensOut } = await translateWithLlm(source);
+    const { segments: rawSegments, tokensIn, tokensOut } =
+      await translateWithLlm(source);
+    const segments = lockTiming(rawSegments);
     const fullText = joinFullText(segments);
 
     return {
@@ -734,7 +752,7 @@ export const translateTranscript = async (
     };
   }
 
-  const segments = await translateWithMachineProviders(source);
+  const segments = lockTiming(await translateWithMachineProviders(source));
   const fullText = joinFullText(segments);
 
   return {

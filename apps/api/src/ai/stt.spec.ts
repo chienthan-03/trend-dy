@@ -103,6 +103,45 @@ describe("mapWhisperResponseToTranscript", () => {
     expect(transcript.segments[0]!.startSec).toBe(0);
     expect(transcript.segments.at(-1)!.endSec).toBe(120);
   });
+
+  it("rebuilds mega cue from words so no cue spans the film gap", () => {
+    const megaText =
+      "打听通缉犯在酒馆哪个地方路人见他眼神犀利也不敢打胡乱说向对方表示感谢后";
+    const transcript = mapWhisperResponseToTranscript(
+      {
+        language: "chinese",
+        duration: 40,
+        text: megaText,
+        segments: [{ start: 0, end: 40, text: megaText }],
+        words: [
+          { word: "顺", start: 7.2, end: 7.4 },
+          { word: "地方", start: 9.38, end: 9.56 },
+          { word: "路", start: 10.26, end: 16.4 },
+          { word: "人", start: 16.4, end: 18.68 },
+          { word: "见", start: 18.68, end: 18.82 },
+          { word: "他", start: 18.82, end: 18.98 },
+          { word: "说", start: 21.54, end: 21.76 },
+          { word: "向", start: 32.24, end: 32.36 },
+          { word: "谢", start: 33.0, end: 33.1 },
+        ],
+      },
+      "openai/whisper-large-v3-turbo",
+      "gateway",
+    );
+
+    expect(transcript.segments.length).toBeGreaterThan(1);
+    expect(transcript.segments.some((s) => s.endSec <= 9.6)).toBe(true);
+    expect(transcript.segments.some((s) => s.startSec >= 18.5)).toBe(true);
+    expect(
+      transcript.segments.every((s) => s.endSec - s.startSec <= 15.01),
+    ).toBe(true);
+    // No cue should cover the film-bed interior between 9.6 and 18.5
+    expect(
+      transcript.segments.every(
+        (s) => !(s.startSec < 9.6 && s.endSec > 18.5),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("detectAudioUploadFormat", () => {

@@ -160,6 +160,7 @@ export type ViralRemake = {
   ttsVoiceId: string | null;
   ttsFitFailedIndexes: number[];
   classifyWarning?: string | null;
+  timingWarning?: string | null;
 };
 
 export type RemixTriggerResult = {

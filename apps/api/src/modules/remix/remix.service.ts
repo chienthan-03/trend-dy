@@ -77,7 +77,7 @@ export type SegmentRolePatch = {
 };
 
 /** Clears anything downstream of the translated transcript so a stale dub/render never survives a role or text change. */
-const invalidateDubAndRenderData = {
+export const invalidateDubAndRenderData = {
   mediaDubAudioKey: null,
   renderOutputKey: null,
   renderPhase: "idle",

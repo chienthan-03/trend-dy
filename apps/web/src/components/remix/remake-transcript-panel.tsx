@@ -32,6 +32,9 @@ interface RemakeTranscriptPanelProps {
   onClassify?: () => void;
   classifyPending?: boolean;
   classifyWarning?: string | null;
+  timingWarning?: string | null;
+  onRetranscribe?: () => void;
+  retranscribePending?: boolean;
 }
 
 export const RemakeTranscriptPanel = ({
@@ -46,6 +49,9 @@ export const RemakeTranscriptPanel = ({
   onClassify,
   classifyPending = false,
   classifyWarning,
+  timingWarning,
+  onRetranscribe,
+  retranscribePending = false,
 }: RemakeTranscriptPanelProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [view, setView] = useState<TranscriptView>("source");
@@ -82,6 +88,26 @@ export const RemakeTranscriptPanel = ({
           {isOpen ? "Thu gọn" : "Xem chi tiết"}
         </Button>
       </div>
+
+      {timingWarning ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          <p>{timingWarning}</p>
+          {scriptMode === "full" && onRetranscribe ? (
+            <Button
+              variant="secondary"
+              onClick={onRetranscribe}
+              disabled={retranscribePending}
+              className="h-8 shrink-0 px-3 text-xs"
+              aria-label="Transcribe lại để làm mịn timeline cue"
+            >
+              {retranscribePending ? "Đang transcribe…" : "Transcribe lại"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {!transcript ? (
         <p className="text-sm text-gray-500 italic">
@@ -136,10 +162,10 @@ export const RemakeTranscriptPanel = ({
             {view === "translated" && translatedTranscript ? (
               <div className="space-y-2">
                 <p className="text-xs text-gray-500">
-                  <strong>Review</strong> = phát ngôn viên đọc, sẽ được lồng tiếng VI
-                  (TTS). <strong>Giữ gốc</strong> = giữ nguyên audio phim gốc, không lồng
-                  tiếng. Đổi vai trò sẽ xoá audio VI đã tạo — cần bấm «Tạo audio VI» lại
-                  trước khi render.
+                  <strong>Review</strong> / <strong>Giữ gốc</strong> là nhãn phân
+                  loại (UI). MVP hiện tại: TTS đọc mọi cue; render duck mọi cửa sổ
+                  cue để tránh double audio. Đổi vai trò vẫn xoá audio VI đã tạo —
+                  cần bấm «Tạo audio VI» lại trước khi render.
                 </p>
                 {classifyWarning ? (
                   <div

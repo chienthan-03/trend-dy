@@ -178,6 +178,23 @@ const RemakeStudioPage = () => {
     }
   };
 
+  const handleRetranscribe = async () => {
+    setPending("retranscribe");
+    setError(null);
+    setInfo(null);
+    try {
+      const result = await api.remix.retranscribe(remakeId);
+      setInfo(
+        `Transcribe lại đã xếp hàng (job ${result.jobId}). Sau STT sẽ dịch lại — rồi bấm «Tạo audio VI».`,
+      );
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
   const handleToggleRole = async (index: number, role: RemixSegmentRole) => {
     setPending("toggleRole");
     setError(null);
@@ -324,10 +341,13 @@ const RemakeStudioPage = () => {
                 pipelinePhase={remake.pipelinePhase}
                 onRetranslate={handleRetranslate}
                 retranslatePending={pending === "retranslate"}
+                onRetranscribe={handleRetranscribe}
+                retranscribePending={pending === "retranscribe"}
                 onToggleRole={handleToggleRole}
                 onClassify={handleClassify}
                 classifyPending={pending === "classify" || pending === "toggleRole"}
                 classifyWarning={remake.classifyWarning}
+                timingWarning={remake.timingWarning}
               />
             </div>
           </Card>

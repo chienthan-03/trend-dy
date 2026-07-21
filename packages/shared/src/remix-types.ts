@@ -71,6 +71,12 @@ export type RemixTranscriptSegment = {
   roleSource?: RemixSegmentRoleSource;
 };
 
+export type RemixTranscriptWord = {
+  startSec: number;
+  endSec: number;
+  text: string;
+};
+
 export type RemixTranscriptV1 = {
   version: 1;
   language: string;
@@ -79,6 +85,8 @@ export type RemixTranscriptV1 = {
   fullText: string;
   provider: string;
   model: string;
+  /** Optional Whisper word timings — used to align TTS pauses to film beds. */
+  words?: RemixTranscriptWord[];
 };
 
 export type RemixSubtitlesV2 = RemixPackageV1["subtitles"] & {

@@ -35,14 +35,17 @@ import {
   type SegmentFitPlan,
 } from "../../modules/remix/tts/segment-fit";
 import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
-import { effectiveRole, mergeNarrationIntervals } from "../../modules/remix/tts/segment-role";
+import { mergeAllCueIntervals } from "../../modules/remix/tts/segment-role";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
-import { splitSegmentsForTts } from "../../modules/remix/tts/split-segments-for-tts";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
+
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
 import { RemixRenderService } from "../../modules/remix/remix-render.service";
 import { RemixStorageService } from "../../modules/remix/remix-storage.service";
-import { RemixService } from "../../modules/remix/remix.service";
+import {
+  invalidateDubAndRenderData,
+  RemixService,
+} from "../../modules/remix/remix.service";
 import { JobsService } from "../../modules/jobs/jobs.service";
 import { PromptsService } from "../../modules/prompts/prompts.service";
 import { estimateLlmCostUsd } from "../../modules/usage/cost";
@@ -439,16 +442,28 @@ export class RemixProcessor extends WorkerHost {
 
     const audioBuffer = await this.remixStorage.getAudio(remake.mediaAudioKey);
 
-    const { transcript, costUsd: sttCostUsd } = await transcribeAudio(audioBuffer);
+    const {
+      transcript,
+      costUsd: sttCostUsd,
+      timingDegraded,
+      timingCoarse,
+    } = await transcribeAudio(audioBuffer);
+
+    const timingWarning =
+      timingDegraded || timingCoarse
+        ? "Timeline cue còn thô hoặc ước lượng — nên Transcribe lại / kiểm tra sync."
+        : null;
 
     await this.prisma.viralRemake.update({
       where: { id: remakeId },
       data: {
         sourceTranscript: transcript as Prisma.InputJsonValue,
         sourceTranscriptTranslated: null,
+        timingWarning,
         videoDurationSec: transcript.durationSec,
         sttCostUsd,
         pipelinePhase: isTranslateEnabled() ? "translating" : "generating",
+        ...invalidateDubAndRenderData,
       },
     });
 
@@ -485,6 +500,20 @@ export class RemixProcessor extends WorkerHost {
 
     const { transcript: translated, tokensIn, tokensOut } =
       await translateTranscript(sourceTranscript);
+
+    if (translated.segments.length !== sourceTranscript.segments.length) {
+      throw new Error(
+        `Translate segment count mismatch: source=${sourceTranscript.segments.length} translated=${translated.segments.length}`,
+      );
+    }
+
+    // Timing must stay 1:1 with source cues — copy-forward any drift from providers.
+    for (let i = 0; i < sourceTranscript.segments.length; i += 1) {
+      const sourceSeg = sourceTranscript.segments[i]!;
+      const translatedSeg = translated.segments[i]!;
+      translatedSeg.startSec = sourceSeg.startSec;
+      translatedSeg.endSec = sourceSeg.endSec;
+    }
 
     await this.prisma.viralRemake.update({
       where: { id: remakeId },
@@ -696,64 +725,51 @@ export class RemixProcessor extends WorkerHost {
     }[] = [];
     let ttsCostUsd = 0;
 
+    // Fine cues from STT are the timeline source of truth — synthesize every
+    // cue in its window (MVP: do not skip source roles; no in-TTS split/align).
     for (let index = 0; index < translated.segments.length; index += 1) {
       const segment = translated.segments[index]!;
-      if (effectiveRole(segment) === "source") continue;
-
-      // Sentence-split long narration only — never source (film dialogue).
-      // Keeps TTS pacing sane when STT returns mega-cues (multi-minute windows).
-      const pieces = splitSegmentsForTts([
-        {
-          startSec: segment.startSec,
-          endSec: segment.endSec,
-          text: segment.text,
-        },
-      ]);
-
+      const targetDurationSec = Math.max(segment.endSec - segment.startSec, 0.1);
       let parentFitFailed = false;
 
-      for (const piece of pieces) {
-        const targetDurationSec = Math.max(piece.endSec - piece.startSec, 0.1);
+      let synth = await adapter.synthesize({ text: segment.text, voiceId });
+      ttsCostUsd += synth.costUsd;
+      let plan = planSegmentFit({
+        audioDurationSec: synth.durationSec,
+        targetDurationSec,
+        maxSpeed,
+      });
 
-        let synth = await adapter.synthesize({ text: piece.text, voiceId });
-        ttsCostUsd += synth.costUsd;
-        let plan = planSegmentFit({
-          audioDurationSec: synth.durationSec,
+      if (plan.action === "shorten") {
+        const shortened = await shortenSegmentText({
+          text: segment.text,
           targetDurationSec,
-          maxSpeed,
         });
 
-        if (plan.action === "shorten") {
-          const shortened = await shortenSegmentText({
-            text: piece.text,
+        if (shortened.text && shortened.text !== segment.text) {
+          synth = await adapter.synthesize({ text: shortened.text, voiceId });
+          ttsCostUsd += synth.costUsd;
+          plan = planSegmentFit({
+            audioDurationSec: synth.durationSec,
             targetDurationSec,
+            maxSpeed,
           });
-
-          if (shortened.text && shortened.text !== piece.text) {
-            synth = await adapter.synthesize({ text: shortened.text, voiceId });
-            ttsCostUsd += synth.costUsd;
-            plan = planSegmentFit({
-              audioDurationSec: synth.durationSec,
-              targetDurationSec,
-              maxSpeed,
-            });
-          }
-
-          if (plan.action === "shorten") {
-            // Still doesn't fit after one shorten pass — record the failure but
-            // keep a best-effort clip (tempo capped at maxSpeed) for this window
-            // rather than dropping the line entirely.
-            parentFitFailed = true;
-          }
         }
 
-        const fittedBuffer = await this.applyFitPlan(synth.buffer, plan);
-        timelineSegments.push({
-          startSec: piece.startSec,
-          endSec: piece.endSec,
-          fittedMp3Buffer: fittedBuffer,
-        });
+        if (plan.action === "shorten") {
+          // Still doesn't fit after one shorten pass — record the failure but
+          // keep a best-effort clip (tempo capped at maxSpeed) for this window
+          // rather than dropping the line entirely.
+          parentFitFailed = true;
+        }
       }
+
+      const fittedBuffer = await this.applyFitPlan(synth.buffer, plan);
+      timelineSegments.push({
+        startSec: segment.startSec,
+        endSec: segment.endSec,
+        fittedMp3Buffer: fittedBuffer,
+      });
 
       if (parentFitFailed) {
         fitFailedIndexes.push(index);
@@ -829,13 +845,11 @@ export class RemixProcessor extends WorkerHost {
 
     let renderedBuffer: Buffer;
     if (remake.dubSource === "tts") {
-      // TTS dub only covers narration windows — mix it under the original
-      // audio and duck the original during those windows.
+      // MVP: duck every translated cue window (ignore roles) so VI TTS never
+      // double-plays over unducked original film audio on the same interval.
       const translated =
         remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
-      const narrationIntervals = mergeNarrationIntervals(
-        translated?.segments ?? [],
-      );
+      const duckIntervals = mergeAllCueIntervals(translated?.segments ?? []);
 
       renderedBuffer =
         remake.renderMode === "banner_audio"
@@ -843,12 +857,12 @@ export class RemixProcessor extends WorkerHost {
               videoBuffer,
               dubBuffer,
               remake.bannerJson as RemixBannerJson,
-              narrationIntervals,
+              duckIntervals,
             )
           : await this.remixRender.renderAudioMix(
               videoBuffer,
               dubBuffer,
-              narrationIntervals,
+              duckIntervals,
             );
     } else {
       // Upload dub, or legacy rows with null dubSource — full replace.

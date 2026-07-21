@@ -12,6 +12,7 @@ import { transcribeAudio } from "../../ai/stt";
 import { translateTranscript } from "../../ai/translate";
 import { extractAudioForStt } from "../../modules/remix/remix-audio.util";
 import { createRemixMediaAdapter } from "../../modules/remix/remix-media.adapter";
+import * as assembleDub from "../../modules/remix/tts/assemble-dub";
 import { FakeTtsAdapter } from "../../modules/remix/tts/fake-tts.adapter";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 
@@ -53,6 +54,8 @@ vi.mock("../../ai/stt", () => ({
       model: "whisper-1",
     },
     costUsd: 0.01,
+    timingDegraded: false,
+    timingCoarse: false,
   }),
 }));
 
@@ -177,6 +180,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
       putVideo: vi.fn().mockResolvedValue("remix/remake_1/source-video.mp4"),
       putAudio: vi.fn().mockResolvedValue("remix/remake_1/source-audio.mp3"),
       getAudio: vi.fn().mockResolvedValue(Buffer.from("audio")),
+      getVideo: vi.fn().mockResolvedValue(Buffer.from("video")),
       putDub: vi.fn().mockResolvedValue("remix/remake_1/dub-audio.mp3"),
     };
 
@@ -342,6 +346,11 @@ describe("RemixProcessor (Full Script Mode)", () => {
           pipelinePhase: "translating",
           videoDurationSec: 10,
           sourceTranscriptTranslated: null,
+          timingWarning: null,
+          mediaDubAudioKey: null,
+          renderOutputKey: null,
+          renderPhase: "idle",
+          dubSource: null,
         }),
       }),
     );
@@ -528,7 +537,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
     });
   });
 
-  it("handleTts skips source-role segments and synthesizes narration only", async () => {
+  it("handleTts synthesizes all cues including source-role segments", async () => {
     const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
 
     remixService.getRemake.mockResolvedValue({
@@ -560,8 +569,8 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
     await processor.process(job);
 
-    // Only the two narration segments are synthesized; the source segment is skipped.
-    expect(synthSpy).toHaveBeenCalledTimes(2);
+    // MVP: speak every cue — roles do not gate TTS.
+    expect(synthSpy).toHaveBeenCalledTimes(3);
     expect(classifyTranslatedSegmentsMock).not.toHaveBeenCalled();
     expect(prisma.viralRemake.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -573,13 +582,15 @@ describe("RemixProcessor (Full Script Mode)", () => {
     );
   });
 
-  it("handleTts sentence-splits long narration but never synthesizes source", async () => {
+  it("handleTts trusts fine cue windows without sentence-split or speech align", async () => {
     const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
+    const assembleSpy = vi.spyOn(assembleDub, "assembleDubTimeline");
 
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
       dubSource: null,
       mediaDubAudioKey: null,
+      mediaAudioKey: "remix/remake_1/source-audio.mp3",
       ttsVoiceId: null,
       videoDurationSec: 30,
       sourceTranscriptTranslated: {
@@ -589,16 +600,23 @@ describe("RemixProcessor (Full Script Mode)", () => {
         segments: [
           {
             startSec: 0,
-            endSec: 20,
+            endSec: 4,
             text: "Câu một khá dài để buộc tách. Câu hai cũng dài tương tự thôi.",
             role: "narration",
             roleSource: "manual",
           },
           {
-            startSec: 20,
-            endSec: 30,
+            startSec: 10,
+            endSec: 14,
             text: "Thoại nhân vật. Câu hai của nhân vật cũng dài.",
             role: "source",
+            roleSource: "manual",
+          },
+          {
+            startSec: 20,
+            endSec: 24,
+            text: "Câu ba ngắn.",
+            role: "narration",
             roleSource: "manual",
           },
         ],
@@ -609,19 +627,29 @@ describe("RemixProcessor (Full Script Mode)", () => {
     });
 
     const job = {
-      id: "job_tts_split_narration",
+      id: "job_tts_trust_cues",
       name: "remix_tts",
       data: { remakeId: "remake_1" },
     } as unknown as BullJob;
 
     await processor.process(job);
 
-    // Narration mega-cue is sentence-split → 2 synth calls; source is skipped entirely.
-    expect(synthSpy).toHaveBeenCalledTimes(2);
+    expect(synthSpy).toHaveBeenCalledTimes(3);
     expect(synthSpy.mock.calls.map((call) => call[0].text)).toEqual([
-      "Câu một khá dài để buộc tách.",
-      "Câu hai cũng dài tương tự thôi.",
+      "Câu một khá dài để buộc tách. Câu hai cũng dài tương tự thôi.",
+      "Thoại nhân vật. Câu hai của nhân vật cũng dài.",
+      "Câu ba ngắn.",
     ]);
+    expect(assembleSpy).toHaveBeenCalled();
+    const timeline = assembleSpy.mock.calls[0]![0]!.segments;
+    expect(timeline).toHaveLength(3);
+    expect(timeline.map((clip) => [clip.startSec, clip.endSec])).toEqual([
+      [0, 4],
+      [10, 14],
+      [20, 24],
+    ]);
+
+    assembleSpy.mockRestore();
   });
 
   it("handleTts records ttsFitFailedIndexes using persisted segment indexes across a source segment", async () => {
@@ -655,9 +683,8 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
     await processor.process(job);
 
-    // Segment 1 is "source" and skipped; segment 2 fits after a shorten pass,
-    // segment 3 still fails — the failure index must reflect its position in
-    // the full (unfiltered) persisted segment list, i.e. 3, not 2.
+    // All four cues are synthesized (MVP speaks source too). Segment 2 fits
+    // after a shorten pass; segment 3 still fails — indexes match the full list.
     expect(shortenSegmentText).toHaveBeenCalledTimes(2);
     expect(prisma.viralRemake.update).toHaveBeenCalledWith(
       expect.objectContaining({

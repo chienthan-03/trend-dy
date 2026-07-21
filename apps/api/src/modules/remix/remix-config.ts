@@ -100,9 +100,13 @@ export const getTtsCostPer1kCharsUsd = (): number => {
 export const getDefaultTtsVoiceId = (): string => {
   const configured = process.env.REMIX_TTS_VOICE?.trim();
   if (configured) return configured;
+  const model = getTtsModel();
   // Grok Voice (OpenRouter default) uses eve/ara/rex/sal/leo — not alloy/nova.
-  if (isOpenRouterTtsBase() && getTtsModel().includes("grok-voice")) {
+  if (isOpenRouterTtsBase() && model.includes("grok-voice")) {
     return "eve";
+  }
+  if (isOpenRouterTtsBase() && /gemini/i.test(model)) {
+    return "Kore";
   }
   return "alloy";
 };
@@ -121,6 +125,20 @@ export const resolveTtsVoiceId = (voiceId: string): string => {
       fable: "sal",
       onyx: "leo",
       shimmer: "ara",
+    };
+    return map[trimmed] ?? trimmed;
+  }
+
+  if (/gemini/i.test(model)) {
+    const map: Record<string, string> = {
+      alloy: "Kore",
+      nova: "Aoede",
+      echo: "Puck",
+      fable: "Leda",
+      onyx: "Orus",
+      shimmer: "Zephyr",
+      eve: "Kore",
+      ara: "Aoede",
     };
     return map[trimmed] ?? trimmed;
   }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { effectiveRole, mergeNarrationIntervals } from "./segment-role";
+import {
+  effectiveRole,
+  mergeAllCueIntervals,
+  mergeNarrationIntervals,
+} from "./segment-role";
 
 describe("effectiveRole", () => {
   it("effectiveRole defaults to narration", () => {
@@ -18,5 +22,16 @@ describe("mergeNarrationIntervals", () => {
         { startSec: 4, endSec: 5, role: "source" },
       ]),
     ).toEqual([{ startSec: 0, endSec: 2 }]);
+  });
+});
+
+describe("mergeAllCueIntervals", () => {
+  it("mergeAllCueIntervals includes source-role cues", () => {
+    expect(
+      mergeAllCueIntervals([
+        { startSec: 0, endSec: 2 },
+        { startSec: 2, endSec: 5 },
+      ]),
+    ).toEqual([{ startSec: 0, endSec: 5 }]);
   });
 });
