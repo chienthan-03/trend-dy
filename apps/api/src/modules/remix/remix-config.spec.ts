@@ -112,9 +112,9 @@ describe("remix-config", () => {
     expect(getRenderFontPath()).toBe("/fonts/Roboto-Bold.ttf");
   });
 
-  it("defaults duck gain to 0.2", () => {
+  it("defaults duck gain to 0 (mute original under narration)", () => {
     delete process.env.REMIX_DUCK_GAIN;
-    expect(getDuckGain()).toBe(0.2);
+    expect(getDuckGain()).toBe(0);
   });
 
   it("reads duck gain from env", () => {
@@ -122,9 +122,12 @@ describe("remix-config", () => {
     expect(getDuckGain()).toBe(0.3);
   });
 
-  it("clamps duck gain to the 0.05–1 range", () => {
+  it("clamps duck gain to the 0–1 range", () => {
     process.env.REMIX_DUCK_GAIN = "0";
-    expect(getDuckGain()).toBe(0.05);
+    expect(getDuckGain()).toBe(0);
+
+    process.env.REMIX_DUCK_GAIN = "-1";
+    expect(getDuckGain()).toBe(0);
 
     process.env.REMIX_DUCK_GAIN = "2";
     expect(getDuckGain()).toBe(1);
@@ -132,6 +135,6 @@ describe("remix-config", () => {
 
   it("falls back to default duck gain for invalid values", () => {
     process.env.REMIX_DUCK_GAIN = "not-a-number";
-    expect(getDuckGain()).toBe(0.2);
+    expect(getDuckGain()).toBe(0);
   });
 });

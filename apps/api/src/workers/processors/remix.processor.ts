@@ -37,6 +37,7 @@ import {
 import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
 import { effectiveRole, mergeNarrationIntervals } from "../../modules/remix/tts/segment-role";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
+import { splitSegmentsForTts } from "../../modules/remix/tts/split-segments-for-tts";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
 import { RemixRenderService } from "../../modules/remix/remix-render.service";
@@ -699,46 +700,64 @@ export class RemixProcessor extends WorkerHost {
       const segment = translated.segments[index]!;
       if (effectiveRole(segment) === "source") continue;
 
-      const targetDurationSec = Math.max(segment.endSec - segment.startSec, 0.1);
-
-      let synth = await adapter.synthesize({ text: segment.text, voiceId });
-      ttsCostUsd += synth.costUsd;
-      let plan = planSegmentFit({
-        audioDurationSec: synth.durationSec,
-        targetDurationSec,
-        maxSpeed,
-      });
-
-      if (plan.action === "shorten") {
-        const shortened = await shortenSegmentText({
+      // Sentence-split long narration only — never source (film dialogue).
+      // Keeps TTS pacing sane when STT returns mega-cues (multi-minute windows).
+      const pieces = splitSegmentsForTts([
+        {
+          startSec: segment.startSec,
+          endSec: segment.endSec,
           text: segment.text,
+        },
+      ]);
+
+      let parentFitFailed = false;
+
+      for (const piece of pieces) {
+        const targetDurationSec = Math.max(piece.endSec - piece.startSec, 0.1);
+
+        let synth = await adapter.synthesize({ text: piece.text, voiceId });
+        ttsCostUsd += synth.costUsd;
+        let plan = planSegmentFit({
+          audioDurationSec: synth.durationSec,
           targetDurationSec,
+          maxSpeed,
         });
 
-        if (shortened.text && shortened.text !== segment.text) {
-          synth = await adapter.synthesize({ text: shortened.text, voiceId });
-          ttsCostUsd += synth.costUsd;
-          plan = planSegmentFit({
-            audioDurationSec: synth.durationSec,
+        if (plan.action === "shorten") {
+          const shortened = await shortenSegmentText({
+            text: piece.text,
             targetDurationSec,
-            maxSpeed,
           });
+
+          if (shortened.text && shortened.text !== piece.text) {
+            synth = await adapter.synthesize({ text: shortened.text, voiceId });
+            ttsCostUsd += synth.costUsd;
+            plan = planSegmentFit({
+              audioDurationSec: synth.durationSec,
+              targetDurationSec,
+              maxSpeed,
+            });
+          }
+
+          if (plan.action === "shorten") {
+            // Still doesn't fit after one shorten pass — record the failure but
+            // keep a best-effort clip (tempo capped at maxSpeed) for this window
+            // rather than dropping the line entirely.
+            parentFitFailed = true;
+          }
         }
 
-        if (plan.action === "shorten") {
-          // Still doesn't fit after one shorten pass — record the failure but
-          // keep a best-effort clip (tempo capped at maxSpeed) for this window
-          // rather than dropping the line entirely.
-          fitFailedIndexes.push(index);
-        }
+        const fittedBuffer = await this.applyFitPlan(synth.buffer, plan);
+        timelineSegments.push({
+          startSec: piece.startSec,
+          endSec: piece.endSec,
+          fittedMp3Buffer: fittedBuffer,
+        });
       }
 
-      const fittedBuffer = await this.applyFitPlan(synth.buffer, plan);
-      timelineSegments.push({
-        startSec: segment.startSec,
-        endSec: segment.endSec,
-        fittedMp3Buffer: fittedBuffer,
-      });
+      if (parentFitFailed) {
+        fitFailedIndexes.push(index);
+      }
     }
 
     const lastSegment = translated.segments[translated.segments.length - 1];

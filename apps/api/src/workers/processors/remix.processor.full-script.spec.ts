@@ -528,7 +528,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
     });
   });
 
-  it("handleTts skips source-role segments and does not sentence-split", async () => {
+  it("handleTts skips source-role segments and synthesizes narration only", async () => {
     const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
 
     remixService.getRemake.mockResolvedValue({
@@ -571,6 +571,57 @@ describe("RemixProcessor (Full Script Mode)", () => {
         }),
       }),
     );
+  });
+
+  it("handleTts sentence-splits long narration but never synthesizes source", async () => {
+    const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      videoDurationSec: 30,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 30,
+        segments: [
+          {
+            startSec: 0,
+            endSec: 20,
+            text: "Câu một khá dài để buộc tách. Câu hai cũng dài tương tự thôi.",
+            role: "narration",
+            roleSource: "manual",
+          },
+          {
+            startSec: 20,
+            endSec: 30,
+            text: "Thoại nhân vật. Câu hai của nhân vật cũng dài.",
+            role: "source",
+            roleSource: "manual",
+          },
+        ],
+        fullText: "…",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_split_narration",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    // Narration mega-cue is sentence-split → 2 synth calls; source is skipped entirely.
+    expect(synthSpy).toHaveBeenCalledTimes(2);
+    expect(synthSpy.mock.calls.map((call) => call[0].text)).toEqual([
+      "Câu một khá dài để buộc tách.",
+      "Câu hai cũng dài tương tự thôi.",
+    ]);
   });
 
   it("handleTts records ttsFitFailedIndexes using persisted segment indexes across a source segment", async () => {
