@@ -40,22 +40,28 @@ const escapeDrawtextValue = (text: string): string =>
     // Unicode apostrophe instead.
     .replace(/'/g, "\u2019");
 
+const requireBannerFontPath = (): string => {
+  const fontPath = getRenderFontPath();
+  if (fontPath) return fontPath;
+  throw new Error(
+    "Banner text requires a TrueType font. Set REMIX_RENDER_FONT_PATH to a .ttf file (e.g. C:/Windows/Fonts/arial.ttf). Gyan ffmpeg on Windows has no fontconfig defaults and will crash without fontfile.",
+  );
+};
+
 const buildDrawtextFilter = (input: {
   text: string;
-  fontPath?: string;
+  fontPath: string;
   fontSize: number;
   y: string;
 }): string => {
   const parts = [
-    input.fontPath
-      ? `fontfile='${escapeDrawtextValue(input.fontPath)}'`
-      : undefined,
+    `fontfile='${escapeDrawtextValue(input.fontPath)}'`,
     `text='${escapeDrawtextValue(input.text)}'`,
     "fontcolor=white",
     `fontsize=${input.fontSize}`,
     "x=(w-text_w)/2",
     `y=${input.y}`,
-  ].filter((part): part is string => Boolean(part));
+  ];
 
   return `drawtext=${parts.join(":")}`;
 };
@@ -184,12 +190,14 @@ export class RemixRenderService {
       const barHeight = Math.max(1, Math.round(sourceHeight * ratio));
       const paddedHeight = sourceHeight + barHeight * 2;
       const fontSize = Math.max(12, Math.round(barHeight * 0.5));
-      const fontPath = getRenderFontPath();
+      const header = banners.header.trim();
+      const bottom = banners.bottom.trim();
+      const fontPath =
+        header || bottom ? requireBannerFontPath() : undefined;
 
       const filters = [`pad=iw:${paddedHeight}:0:${barHeight}:black`];
 
-      const header = banners.header.trim();
-      if (header) {
+      if (header && fontPath) {
         filters.push(
           buildDrawtextFilter({
             text: header,
@@ -200,8 +208,7 @@ export class RemixRenderService {
         );
       }
 
-      const bottom = banners.bottom.trim();
-      if (bottom) {
+      if (bottom && fontPath) {
         filters.push(
           buildDrawtextFilter({
             text: bottom,
@@ -317,12 +324,14 @@ export class RemixRenderService {
       const barHeight = Math.max(1, Math.round(sourceHeight * ratio));
       const paddedHeight = sourceHeight + barHeight * 2;
       const fontSize = Math.max(12, Math.round(barHeight * 0.5));
-      const fontPath = getRenderFontPath();
+      const header = banners.header.trim();
+      const bottom = banners.bottom.trim();
+      const fontPath =
+        header || bottom ? requireBannerFontPath() : undefined;
 
       const videoFilters = [`pad=iw:${paddedHeight}:0:${barHeight}:black`];
 
-      const header = banners.header.trim();
-      if (header) {
+      if (header && fontPath) {
         videoFilters.push(
           buildDrawtextFilter({
             text: header,
@@ -333,8 +342,7 @@ export class RemixRenderService {
         );
       }
 
-      const bottom = banners.bottom.trim();
-      if (bottom) {
+      if (bottom && fontPath) {
         videoFilters.push(
           buildDrawtextFilter({
             text: bottom,

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { ServiceUnavailableException } from "@nestjs/common";
 import type { RemixScriptMode } from "@factory/shared";
 
@@ -186,9 +187,39 @@ export const getLetterboxRatio = (): number => {
   return Number.isFinite(n) && n > 0 && n < 0.5 ? n : 0.1;
 };
 
-/** Custom font file for letterbox drawtext; omit to use ffmpeg's default/fontconfig. */
-export const getRenderFontPath = (): string | undefined =>
-  process.env.REMIX_RENDER_FONT_PATH?.trim() || undefined;
+/**
+ * Gyan/Windows ffmpeg builds often ship without fontconfig defaults; drawtext
+ * then crashes (exit 0xC0000005). Prefer an explicit .ttf via env, else the
+ * first readable system font we know about.
+ */
+const DEFAULT_RENDER_FONT_CANDIDATES = [
+  "C:\\Windows\\Fonts\\arial.ttf",
+  "C:\\Windows\\Fonts\\segoeui.ttf",
+  "C:\\Windows\\Fonts\\tahoma.ttf",
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+  "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+  "/System/Library/Fonts/Supplemental/Arial.ttf",
+];
+
+/** ffmpeg drawtext wants forward slashes; escape of `:` happens at filter build. */
+const normalizeFontPathForFfmpeg = (fontPath: string): string =>
+  fontPath.replace(/\\/g, "/");
+
+/**
+ * Font file for letterbox `drawtext`.
+ * `REMIX_RENDER_FONT_PATH` wins when set; otherwise auto-detect a system TTF.
+ */
+export const getRenderFontPath = (): string | undefined => {
+  const configured = process.env.REMIX_RENDER_FONT_PATH?.trim();
+  if (configured) return normalizeFontPathForFfmpeg(configured);
+
+  for (const candidate of DEFAULT_RENDER_FONT_CANDIDATES) {
+    if (existsSync(candidate)) {
+      return normalizeFontPathForFfmpeg(candidate);
+    }
+  }
+  return undefined;
+};
 
 /**
  * Original-track gain during narration windows (0–1, default 0 = mute).

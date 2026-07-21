@@ -102,14 +102,22 @@ describe("remix-config", () => {
     expect(getLetterboxRatio()).toBe(0.1);
   });
 
-  it("defaults render font path to undefined", () => {
-    delete process.env.REMIX_RENDER_FONT_PATH;
-    expect(getRenderFontPath()).toBeUndefined();
-  });
-
   it("reads render font path from env", () => {
     process.env.REMIX_RENDER_FONT_PATH = "/fonts/Roboto-Bold.ttf";
     expect(getRenderFontPath()).toBe("/fonts/Roboto-Bold.ttf");
+  });
+
+  it("normalizes Windows backslashes in configured font path", () => {
+    process.env.REMIX_RENDER_FONT_PATH = "C:\\Windows\\Fonts\\arial.ttf";
+    expect(getRenderFontPath()).toBe("C:/Windows/Fonts/arial.ttf");
+  });
+
+  it("auto-detects a system font when env is unset", () => {
+    delete process.env.REMIX_RENDER_FONT_PATH;
+    const fontPath = getRenderFontPath();
+    if (process.platform === "win32") {
+      expect(fontPath).toMatch(/\/Fonts\/(arial|segoeui|tahoma)\.ttf$/i);
+    }
   });
 
   it("defaults duck gain to 0 (mute original under narration)", () => {
