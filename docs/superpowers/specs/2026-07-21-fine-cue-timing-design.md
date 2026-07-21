@@ -48,7 +48,7 @@ Silence-based alignment fails because **film dialogue is loud speech**, not sile
 
 - Speaker diarization / perfect film-vs-narrator separation.  
 - Re-enabling narration vs `source` role skip as a **blocker** for this MVP (roles may remain in schema/UI but TTS treats all cues as speakable — brainstorm **B**).  
-- Hearing original film audio inside gaps as a product guarantee (duck/mix policy unchanged except role skip relaxation).  
+- Hearing original film audio **under** VI on the same window (must not double-play — see render decision).  
 - Changing TTS vendor pricing (Gemini/Grok) beyond existing config.  
 - ZIP subtitle format redesign (optional follow-up: export fine cues as SRT).
 
@@ -71,8 +71,9 @@ Silence-based alignment fails because **film dialogue is loud speech**, not sile
 | Translate | 1:1 count; copy `startSec`/`endSec` |
 | TTS | Trust cue windows; **disable** `splitSegmentsForTts`, `detectSpeechRegions`, in-TTS `transcribeWordsInWindow` align |
 | Roles (MVP) | Do **not** skip TTS for `source`; treat all cues as TTS (classify optional / non-blocking) |
+| Render duck/mix (MVP) | **Ignore roles.** Duck (or treat as narration windows) on **every** translated cue interval that has TTS audio. Do not leave original unducked under a cue that was classified `source` while dub still speaks VI there. |
 | Existing remakes | Full **re-STT → re-translate → re-TTS** |
-| Coarse warning | e.g. median cue > 15s or one cue > 20% of duration |
+| Coarse warning | Fire when **median cue duration > 15s** OR **any cue duration > 20% of `durationSec`** OR degraded (no-words) normalize was used |
 
 ---
 
@@ -138,7 +139,7 @@ Algorithm sketch:
 
 - Input/output segment counts must match.  
 - Each output segment: translated `text`; `startSec`/`endSec` copied from source.  
-- On count mismatch: fail or warn without inventing timings (same spirit as classify count checks).  
+- On count mismatch: **hard-fail** the translate job (do not persist a mismatched translated transcript; do not proceed to TTS). Same spirit as classify count checks, but fail-closed.  
 - Roles: MVP may leave `role` unset or force narration semantics at TTS; do not block translate on classify.
 
 ---
@@ -152,6 +153,8 @@ Ordered steps after this change:
 3. **Do not** require classify for speakability; synthesize **all** cues (MVP B).  
 4. For each segment: `targetDurationSec = end - start`; synthesize → fit → optional one shorten pass → push clip at absolute `startSec`.  
 5. Assemble dub; set `tts_ready`.
+
+**Render (MVP, with TTS-all-cues):** when building duck/mix envelopes, treat **every** cue interval as a narration window (ignore `role` / `roleSource`). Gaps *between* cues keep original at full level. This prevents double audio if stale `source` roles remain on the transcript.
 
 **Removed from this path (when fine-cue pipeline is active):**
 
@@ -177,7 +180,7 @@ Word timestamps remain relevant **only** at STT normalize time.
 |---|---|
 | Whisper omits words | Degraded proportional cues + `timingWarning` |
 | Normalize yields 0 cues but text exists | Fail STT job with clear error |
-| Translate count ≠ source count | Reject / warn; do not TTS with mismatched timings |
+| Translate count ≠ source count | **Hard-fail** translate job; do not persist mismatched transcript |
 | Cue window too short for TTS audio | Existing fit/shorten/`ttsFitFailedIndexes` |
 | Provider rejects `word` granularity | Fall back to segment-only + warning (same as degraded) |
 
@@ -198,7 +201,7 @@ Word timestamps remain relevant **only** at STT normalize time.
 
 | Prior | Effect |
 |---|---|
-| Narration/source mix (2026-07-20) | Schema/UI for roles may remain; **this MVP does not rely on role skip** for film beds. Film beds become **gaps between fine cues** (no VI speech). Re-enable role-based original keep as a **follow-up** once cues are trustworthy. |
+| Narration/source mix (2026-07-20) | Schema/UI for roles may remain; **this MVP does not rely on role skip** for film beds. Film beds become **gaps between fine cues** (no VI speech). At render, **ignore roles** and duck all cue intervals while TTS speaks all cues. Re-enable role-based original keep as a **follow-up** once cues are trustworthy. |
 | Silence/word-align pause plan | Superseded for TTS; word clustering moves upstream into STT normalize. |
 
 ---
@@ -219,8 +222,9 @@ Word timestamps remain relevant **only** at STT normalize time.
 | `normalize-cue-timing.ts` (+ spec) | Pure normalize |
 | `stt.ts` | Always request words when verbose; call normalize; set warning |
 | Translate path | Enforce timing copy / count |
-| `remix.processor.ts` `handleTts` | Remove fine-window align/split branch |
-| Remake model / API | Optional `timingWarning` |
+| `remix.processor.ts` `handleTts` | Remove fine-window align/split branch; TTS all cues |
+| `remix-render` / duck envelope | MVP: duck **all** cue intervals (ignore role) when `dubSource === "tts"` |
+| Remake model / API | Optional `timingWarning` (or reuse existing warning field) |
 | Studio | Coarse warning + re-STT CTA |
 | Docs / smoke checklist | Migration steps |
 
