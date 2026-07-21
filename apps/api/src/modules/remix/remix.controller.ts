@@ -10,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
   StreamableFile,
   UploadedFile,
   UseGuards,
@@ -17,6 +18,7 @@ import {
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { memoryStorage } from "multer";
+import type { Request, Response } from "express";
 import {
   SessionAuthGuard,
   type RequestWithUser,
@@ -30,6 +32,22 @@ import { RemixExportService } from "./remix-export.service";
 import { RemixPolicyGuard } from "./remix-policy.guard";
 import { RemixStorageService } from "./remix-storage.service";
 import { RemixService } from "./remix.service";
+
+const parseBytesRange = (
+  rangeHeader: string | undefined,
+  size: number,
+): { start: number; end: number } | null => {
+  if (!rangeHeader || !rangeHeader.startsWith("bytes=") || size <= 0) {
+    return null;
+  }
+  const [startRaw, endRaw] = rangeHeader.replace("bytes=", "").split("-", 2);
+  const start = Number(startRaw);
+  const end = endRaw === "" || endRaw === undefined ? size - 1 : Number(endRaw);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) {
+    return null;
+  }
+  return { start, end: Math.min(end, size - 1) };
+};
 
 @Controller("viral/remix")
 @UseGuards(SessionAuthGuard)
@@ -142,8 +160,10 @@ export class RemixController {
   @Get(":id/render")
   async streamRender(
     @Param("id") id: string,
-    @Query("download") download?: string,
-  ): Promise<StreamableFile> {
+    @Query("download") download: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
     const remake = await this.remixService.getRemake(id);
     const isDownload = download === "1";
 
@@ -159,14 +179,38 @@ export class RemixController {
       throw new NotFoundException("Render output not found for this remake");
     }
 
-    const buffer = await this.remixStorage.getRender(remake.renderOutputKey);
+    const head = await this.remixStorage.headRender(remake.renderOutputKey);
+    const size = head.contentLength;
+    const range = isDownload ? null : parseBytesRange(req.headers.range, size);
+    const streamResult = await this.remixStorage.getRenderStream(
+      remake.renderOutputKey,
+      range ?? undefined,
+    );
 
-    return new StreamableFile(buffer, {
-      type: "video/mp4",
-      disposition: isDownload
-        ? `attachment; filename="remix-${id}-render.mp4"`
-        : undefined,
-    });
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Type", streamResult.contentType ?? "video/mp4");
+    res.setHeader("Cache-Control", "private, max-age=60");
+
+    if (isDownload) {
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="remix-${id}-render.mp4"`,
+      );
+    }
+
+    if (range) {
+      res.status(206);
+      res.setHeader(
+        "Content-Range",
+        streamResult.contentRange ?? `bytes ${range.start}-${range.end}/${size}`,
+      );
+      res.setHeader("Content-Length", String(streamResult.contentLength));
+    } else {
+      res.status(200);
+      res.setHeader("Content-Length", String(range ? streamResult.contentLength : size));
+    }
+
+    streamResult.body.pipe(res);
   }
 
   @Get(":id/transcript")

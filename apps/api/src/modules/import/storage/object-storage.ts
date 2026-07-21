@@ -1,10 +1,12 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import type { Readable } from "node:stream";
 
 export type ObjectStorage = {
   putObject: (
@@ -13,6 +15,16 @@ export type ObjectStorage = {
     contentType?: string,
   ) => Promise<void>;
   getObject: (key: string) => Promise<Buffer>;
+  headObject: (key: string) => Promise<{ contentLength: number; contentType?: string }>;
+  getObjectStream: (
+    key: string,
+    range?: { start: number; end: number },
+  ) => Promise<{
+    body: Readable;
+    contentLength: number;
+    contentRange?: string;
+    contentType?: string;
+  }>;
   deleteObject: (key: string) => Promise<void>;
   getSignedDownloadUrl: (key: string, expiresInSeconds?: number) => Promise<string>;
 };
@@ -69,6 +81,38 @@ export const createObjectStorage = (
       throw new Error(`Empty S3 object: ${key}`);
     }
     return Buffer.from(bytes);
+  },
+  headObject: async (key) => {
+    const result = await client.send(
+      new HeadObjectCommand({ Bucket: bucket, Key: key }),
+    );
+    return {
+      contentLength: result.ContentLength ?? 0,
+      contentType: result.ContentType,
+    };
+  },
+  getObjectStream: async (key, range) => {
+    const result = await client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ...(range
+          ? { Range: `bytes=${range.start}-${range.end}` }
+          : {}),
+      }),
+    );
+    if (!result.Body) {
+      throw new Error(`Empty S3 object stream: ${key}`);
+    }
+    const contentLength =
+      result.ContentLength ??
+      (range ? range.end - range.start + 1 : 0);
+    return {
+      body: result.Body as Readable,
+      contentLength,
+      contentRange: result.ContentRange,
+      contentType: result.ContentType,
+    };
   },
   deleteObject: async (key) => {
     await client.send(

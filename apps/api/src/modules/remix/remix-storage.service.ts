@@ -93,6 +93,22 @@ export class RemixStorageService {
     return this.storage.getObject(key);
   }
 
+  async headRender(key: string): Promise<{ contentLength: number; contentType?: string }> {
+    return this.storage.headObject(key);
+  }
+
+  async getRenderStream(
+    key: string,
+    range?: { start: number; end: number },
+  ): Promise<{
+    body: import("node:stream").Readable;
+    contentLength: number;
+    contentRange?: string;
+    contentType?: string;
+  }> {
+    return this.storage.getObjectStream(key, range);
+  }
+
   async deleteRender(key: string): Promise<void> {
     await this.storage.deleteObject(key);
   }

@@ -75,6 +75,28 @@ const createE2eRemixStorage = (): RemixStorageService =>
     putRender: async (remakeId: string, buffer: Buffer) =>
       putObject(`remix/${remakeId}/render.mp4`, buffer),
     getRender: getObject,
+    headRender: async (key: string) => {
+      const buffer = await getObject(key);
+      return { contentLength: buffer.length, contentType: "video/mp4" };
+    },
+    getRenderStream: async (
+      key: string,
+      range?: { start: number; end: number },
+    ) => {
+      const { Readable } = await import("node:stream");
+      const buffer = await getObject(key);
+      const slice = range
+        ? buffer.subarray(range.start, range.end + 1)
+        : buffer;
+      return {
+        body: Readable.from(slice),
+        contentLength: slice.length,
+        contentRange: range
+          ? `bytes ${range.start}-${range.end}/${buffer.length}`
+          : undefined,
+        contentType: "video/mp4",
+      };
+    },
     deleteRender: async (key: string) => {
       e2eObjectStore.delete(key);
     },
