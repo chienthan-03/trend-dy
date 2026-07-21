@@ -257,7 +257,7 @@ git commit -m "feat(remix): normalize Whisper cues at STT map time"
 
 ---
 
-### Task 3: Persist `timingWarning` + invalidate STT invalidation
+### Task 3: Persist `timingWarning` + invalidate dub on STT
 
 **Files:**
 - Modify: `prisma/schema.prisma`
