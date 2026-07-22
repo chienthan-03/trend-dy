@@ -8,7 +8,9 @@ import {
   secToSrtTimestamp,
 } from "@factory/shared";
 import { useState } from "react";
+import { costLabelForAction } from "@/components/remix/remake-cost-estimates";
 import { Badge, Button } from "@/components/ui";
+import type { RemixCostEstimate } from "@/lib/api-client";
 
 type TranscriptView = "source" | "translated";
 
@@ -26,6 +28,7 @@ interface RemakeTranscriptPanelProps {
   videoDurationSec: number | null;
   scriptMode: RemixScriptMode;
   pipelinePhase?: string;
+  costEstimate?: RemixCostEstimate | null;
   onRetranslate?: () => void;
   retranslatePending?: boolean;
   onToggleRole?: (index: number, role: RemixSegmentRole) => void;
@@ -43,6 +46,7 @@ export const RemakeTranscriptPanel = ({
   videoDurationSec,
   scriptMode,
   pipelinePhase,
+  costEstimate = null,
   onRetranslate,
   retranslatePending = false,
   onToggleRole,
@@ -55,6 +59,10 @@ export const RemakeTranscriptPanel = ({
 }: RemakeTranscriptPanelProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [view, setView] = useState<TranscriptView>("source");
+
+  const retranscribeCost = costLabelForAction(costEstimate, "retranscribe");
+  const retranslateCost = costLabelForAction(costEstimate, "retranslate");
+  const classifyCost = costLabelForAction(costEstimate, "classify");
 
   if (!transcript && scriptMode === "caption") {
     return null;
@@ -104,6 +112,9 @@ export const RemakeTranscriptPanel = ({
               aria-label="Transcribe lại để làm mịn timeline cue"
             >
               {retranscribePending ? "Đang transcribe…" : "Transcribe lại"}
+              {retranscribeCost ? (
+                <span className="ml-1 opacity-70">({retranscribeCost})</span>
+              ) : null}
             </Button>
           ) : null}
         </div>
@@ -134,15 +145,32 @@ export const RemakeTranscriptPanel = ({
                 Đã dịch (VI)
               </Button>
               <div className="ml-auto flex flex-wrap items-center gap-2">
+                {scriptMode === "full" && onRetranscribe ? (
+                  <Button
+                    variant="secondary"
+                    onClick={onRetranscribe}
+                    disabled={retranscribePending || isTranslating}
+                    className="h-8 px-3 text-xs"
+                    aria-label="Transcribe lại để làm mịn timeline cue"
+                  >
+                    {retranscribePending ? "Đang transcribe…" : "Transcribe lại"}
+                    {retranscribeCost ? (
+                      <span className="ml-1 opacity-70">({retranscribeCost})</span>
+                    ) : null}
+                  </Button>
+                ) : null}
                 {scriptMode === "full" && onRetranslate ? (
                   <Button
                     variant="secondary"
                     onClick={onRetranslate}
-                    disabled={isTranslating}
+                    disabled={isTranslating || retranscribePending}
                     className="h-8 px-3 text-xs"
                     aria-label="Dịch transcript sang tiếng Việt"
                   >
                     {isTranslating ? "Đang dịch…" : "Dịch transcript"}
+                    {retranslateCost ? (
+                      <span className="ml-1 opacity-70">({retranslateCost})</span>
+                    ) : null}
                   </Button>
                 ) : null}
                 {view === "translated" && translatedTranscript && onClassify ? (
@@ -154,6 +182,9 @@ export const RemakeTranscriptPanel = ({
                     aria-label="Phân loại lại vai trò các dòng thoại bằng AI"
                   >
                     {classifyPending ? "Đang phân loại…" : "Phân loại lại"}
+                    {classifyCost ? (
+                      <span className="ml-1 opacity-70">({classifyCost})</span>
+                    ) : null}
                   </Button>
                 ) : null}
               </div>

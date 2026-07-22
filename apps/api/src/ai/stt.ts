@@ -19,6 +19,7 @@ import {
   detectCoarseTiming,
   normalizeCueTiming,
 } from "../modules/remix/tts/normalize-cue-timing";
+import { logGatewayCall, truncateForGatewayLog } from "./openrouter-call-log";
 
 export type TranscribeAudioResult = {
   transcript: RemixTranscriptV1;
@@ -315,6 +316,7 @@ const transcribeWithOpenAi = async (
   };
 
   let usedJsonFallback = false;
+  const started = Date.now();
   let response = await requestTranscription(preferredFormat);
   if (
     !response.ok &&
@@ -328,6 +330,27 @@ const transcribeWithOpenAi = async (
 
   if (!response.ok) {
     const body = await response.text();
+    logGatewayCall({
+      kind: "stt",
+      type: "remix_stt",
+      model,
+      host: baseUrl,
+      status: "error",
+      durationMs: Date.now() - started,
+      input: {
+        languageHint: languageHint ?? null,
+        responseFormat: usedJsonFallback ? "json" : preferredFormat,
+        audioBytes: audioBuffer.length,
+        mime,
+        fileName,
+        timeOffsetSec,
+      },
+      output: {
+        httpStatus: response.status,
+        body: truncateForGatewayLog(body).text,
+      },
+      error: `STT request failed (${response.status})`,
+    });
     throw new Error(`STT request failed (${response.status}): ${body}`);
   }
 
@@ -341,11 +364,40 @@ const transcribeWithOpenAi = async (
     fallbackDurationSec,
   );
 
+  const costUsd = estimateSttCostUsd(
+    mapped.transcript.durationSec - timeOffsetSec,
+  );
+
+  logGatewayCall({
+    kind: "stt",
+    type: "remix_stt",
+    model,
+    host: baseUrl,
+    status: "ok",
+    durationMs: Date.now() - started,
+    input: {
+      languageHint: languageHint ?? null,
+      responseFormat: usedJsonFallback ? "json" : preferredFormat,
+      audioBytes: audioBuffer.length,
+      mime,
+      fileName,
+      timeOffsetSec,
+      usedJsonFallback,
+    },
+    output: {
+      segmentCount: mapped.transcript.segments.length,
+      durationSec: mapped.transcript.durationSec,
+      fullTextChars: mapped.transcript.fullText.length,
+      fullTextPreview: truncateForGatewayLog(mapped.transcript.fullText).text,
+      costUsd,
+      timingDegraded: mapped.timingDegraded || usedJsonFallback,
+      timingCoarse: mapped.timingCoarse || usedJsonFallback,
+    },
+  });
+
   return {
     transcript: mapped.transcript,
-    costUsd: estimateSttCostUsd(
-      mapped.transcript.durationSec - timeOffsetSec,
-    ),
+    costUsd,
     timingDegraded: mapped.timingDegraded || usedJsonFallback,
     timingCoarse: mapped.timingCoarse || usedJsonFallback,
   };

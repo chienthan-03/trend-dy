@@ -12,6 +12,7 @@ import {
 } from "../remix-config";
 import type { TtsAdapter, TtsSynthesizeInput, TtsSynthesizeResult } from "./tts.adapter";
 import { runFfmpeg } from "../remix-audio.util";
+import { logGatewayCall, truncateForGatewayLog } from "../../../ai/openrouter-call-log";
 
 const getFfprobePath = (): string => process.env.FFPROBE_PATH ?? "ffprobe";
 
@@ -135,9 +136,10 @@ export class HttpTtsAdapter implements TtsAdapter {
     const baseUrl = getTtsApiBaseUrl();
     const model = getTtsModel();
     const voice = resolveTtsVoiceId(input.voiceId);
-    // Gemini TTS on OpenRouter only accepts pcm; convert to mp3 for the dub pipeline.
     const wantsPcm = /gemini/i.test(model);
     const responseFormat = wantsPcm ? "pcm" : "mp3";
+    const started = Date.now();
+    const textLog = truncateForGatewayLog(input.text);
 
     let response: Response;
     try {
@@ -159,11 +161,48 @@ export class HttpTtsAdapter implements TtsAdapter {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      logGatewayCall({
+        kind: "tts",
+        type: "remix_tts",
+        model,
+        host: baseUrl,
+        status: "error",
+        durationMs: Date.now() - started,
+        input: {
+          voice,
+          responseFormat,
+          text: textLog.text,
+          chars: textLog.length,
+          textTruncated: textLog.truncated,
+        },
+        output: {},
+        error: message,
+      });
       throw new Error(`TTS request failed: ${message}`);
     }
 
     if (!response.ok) {
       const body = await response.text();
+      logGatewayCall({
+        kind: "tts",
+        type: "remix_tts",
+        model,
+        host: baseUrl,
+        status: "error",
+        durationMs: Date.now() - started,
+        input: {
+          voice,
+          responseFormat,
+          text: textLog.text,
+          chars: textLog.length,
+          textTruncated: textLog.truncated,
+        },
+        output: {
+          httpStatus: response.status,
+          body: truncateForGatewayLog(body).text,
+        },
+        error: `TTS request failed (${response.status})`,
+      });
       throw new Error(`TTS request failed (${response.status}): ${body}`);
     }
 
@@ -175,12 +214,35 @@ export class HttpTtsAdapter implements TtsAdapter {
     }
 
     const durationSec = await measureDurationSec(buffer);
+    const costUsd = estimateTtsCostUsd(input.text);
+
+    logGatewayCall({
+      kind: "tts",
+      type: "remix_tts",
+      model,
+      host: baseUrl,
+      status: "ok",
+      durationMs: Date.now() - started,
+      input: {
+        voice,
+        responseFormat,
+        text: textLog.text,
+        chars: textLog.length,
+        textTruncated: textLog.truncated,
+      },
+      output: {
+        contentType: "audio/mpeg",
+        audioBytes: buffer.length,
+        durationSec,
+        costUsd,
+      },
+    });
 
     return {
       buffer,
       contentType: "audio/mpeg",
       durationSec,
-      costUsd: estimateTtsCostUsd(input.text),
+      costUsd,
     };
   }
 }

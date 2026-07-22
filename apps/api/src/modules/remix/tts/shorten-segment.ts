@@ -15,6 +15,14 @@ const isFakeMode = (): boolean =>
   process.env.REMIX_TTS_MODE?.trim().toLowerCase() === "fake" ||
   process.env.LLM_MODE?.trim().toLowerCase() === "fake";
 
+/** Default `local` — LLM shorten doubles OpenRouter spend on short fine cues. */
+const useLocalShorten = (): boolean => {
+  if (isFakeMode()) return true;
+  const mode = process.env.REMIX_TTS_SHORTEN_MODE?.trim().toLowerCase();
+  if (mode === "llm") return false;
+  return true;
+};
+
 const SHORTEN_SYSTEM_PROMPT =
   "You rewrite a single Vietnamese voiceover line so it can be spoken in less time. " +
   "Preserve the core meaning and tone. Return ONLY the rewritten line — no quotes, " +
@@ -57,7 +65,7 @@ export const shortenSegmentText = async (
     return { text: trimmed };
   }
 
-  if (isFakeMode()) {
+  if (useLocalShorten()) {
     return { text: shortenTextLocally(trimmed) };
   }
 

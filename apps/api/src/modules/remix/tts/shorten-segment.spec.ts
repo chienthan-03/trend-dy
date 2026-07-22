@@ -52,9 +52,25 @@ describe("shortenSegmentText", () => {
     expect(completeTextMock).not.toHaveBeenCalled();
   });
 
-  it("calls completeText in live mode and strips wrapping quotes", async () => {
+  it("defaults to local shorten without LLM (avoids OpenRouter burn on fine cues)", async () => {
     delete process.env.REMIX_TTS_MODE;
     delete process.env.LLM_MODE;
+    delete process.env.REMIX_TTS_SHORTEN_MODE;
+    vi.resetModules();
+    const { shortenSegmentText } = await import("./shorten-segment");
+
+    const original = "one two three four five six seven eight";
+    const result = await shortenSegmentText({ text: original, targetDurationSec: 2 });
+
+    expect(completeTextMock).not.toHaveBeenCalled();
+    expect(result.text).toBe("one two three four five");
+  });
+
+  it("calls completeText when REMIX_TTS_SHORTEN_MODE=llm and strips wrapping quotes", async () => {
+    delete process.env.REMIX_TTS_MODE;
+    delete process.env.LLM_MODE;
+    process.env.REMIX_TTS_SHORTEN_MODE = "llm";
+    vi.resetModules();
     completeTextMock.mockResolvedValue({
       text: '"Câu ngắn hơn"',
       model: "gpt-4.1-mini",
@@ -81,6 +97,8 @@ describe("shortenSegmentText", () => {
   it("falls back to local shortening when the LLM returns empty text", async () => {
     delete process.env.REMIX_TTS_MODE;
     delete process.env.LLM_MODE;
+    process.env.REMIX_TTS_SHORTEN_MODE = "llm";
+    vi.resetModules();
     completeTextMock.mockResolvedValue({
       text: "   ",
       model: "gpt-4.1-mini",

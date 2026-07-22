@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PipelineStatusBadge } from "@/components/remix/pipeline-status-badge";
+import { RemakeCostEstimates } from "@/components/remix/remake-cost-estimates";
 import { RemakeEditor } from "@/components/remix/remake-editor";
 import { RemakeSourcePanel } from "@/components/remix/remake-source-panel";
 import { RemakeTranscriptPanel } from "@/components/remix/remake-transcript-panel";
@@ -27,6 +28,7 @@ import {
 import {
   api,
   getErrorMessage,
+  type RemixCostEstimate,
   type ViralRemake,
 } from "@/lib/api-client";
 
@@ -47,7 +49,27 @@ const RemakeStudioPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [costEstimate, setCostEstimate] = useState<RemixCostEstimate | null>(
+    null,
+  );
+  const [costEstimateError, setCostEstimateError] = useState<string | null>(
+    null,
+  );
+  const [costEstimateLoading, setCostEstimateLoading] = useState(false);
   const dirtyRef = useRef(false);
+
+  const loadCostEstimate = useCallback(async () => {
+    setCostEstimateLoading(true);
+    try {
+      setCostEstimateError(null);
+      const data = await api.remix.getCostEstimate(remakeId);
+      setCostEstimate(data);
+    } catch (err) {
+      setCostEstimateError(getErrorMessage(err));
+    } finally {
+      setCostEstimateLoading(false);
+    }
+  }, [remakeId]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -89,6 +111,10 @@ const RemakeStudioPage = () => {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadCostEstimate();
+  }, [loadCostEstimate, transcript, translatedTranscript, remake?.renderPhase]);
 
   const processing = remake
     ? isProcessingStatus(remake.status) ||
@@ -333,12 +359,18 @@ const RemakeStudioPage = () => {
                 sourceUrl={remake.sourceUrl}
                 genre={remake.genre}
               />
+              <RemakeCostEstimates
+                estimate={costEstimate}
+                error={costEstimateError}
+                loading={costEstimateLoading}
+              />
               <RemakeTranscriptPanel
                 transcript={transcript}
                 translatedTranscript={translatedTranscript}
                 videoDurationSec={remake.videoDurationSec}
                 scriptMode={remake.scriptMode as RemixScriptMode}
                 pipelinePhase={remake.pipelinePhase}
+                costEstimate={costEstimate}
                 onRetranslate={handleRetranslate}
                 retranslatePending={pending === "retranslate"}
                 onRetranscribe={handleRetranscribe}
@@ -376,7 +408,8 @@ const RemakeStudioPage = () => {
           <Card title="Video xuất bản (Dub + Render)">
             <VideoOutputPanel
               remake={remake}
-              pipelineReady={remake.pipelinePhase === "ready"}
+              pipelineReady={Boolean(translatedTranscript)}
+              costEstimate={costEstimate}
               onRemakeChange={(updated) => setRemake(updated)}
               onError={(message) => setError(message)}
               onInfo={(message) => setInfo(message)}

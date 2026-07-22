@@ -29,6 +29,12 @@ import {
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "../../modules/remix/translate-config";
 import { assembleDubTimeline } from "../../modules/remix/tts/assemble-dub";
 import {
+  batchCuesForTts,
+  getTtsBatchMode,
+  type CueForBatch,
+} from "../../modules/remix/tts/batch-cues-for-tts";
+import { splitBatchAudioToCues } from "../../modules/remix/tts/split-batch-audio";
+import {
   applyPad,
   applyTempo,
   planSegmentFit,
@@ -37,6 +43,11 @@ import {
 import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
 import { mergeAllCueIntervals } from "../../modules/remix/tts/segment-role";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
+import {
+  readTtsBatchCache,
+  ttsBatchCacheKey,
+  writeTtsBatchCache,
+} from "../../modules/remix/tts/tts-batch-cache";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
 
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
@@ -718,63 +729,157 @@ export class RemixProcessor extends WorkerHost {
     const maxSpeed = getTtsMaxSpeed();
 
     const fitFailedIndexes: number[] = [];
-    const timelineSegments: {
-      startSec: number;
-      endSec: number;
-      fittedMp3Buffer: Buffer;
-    }[] = [];
+    const timelineByIndex = new Map<
+      number,
+      { startSec: number; endSec: number; fittedMp3Buffer: Buffer }
+    >();
     let ttsCostUsd = 0;
 
-    // Fine cues from STT are the timeline source of truth — synthesize every
-    // cue in its window (MVP: do not skip source roles; no in-TTS split/align).
-    for (let index = 0; index < translated.segments.length; index += 1) {
-      const segment = translated.segments[index]!;
-      const targetDurationSec = Math.max(segment.endSec - segment.startSec, 0.1);
-      let parentFitFailed = false;
+    const cues: CueForBatch[] = translated.segments.map((segment, index) => ({
+      index,
+      text: segment.text,
+      startSec: segment.startSec,
+      endSec: segment.endSec,
+    }));
 
-      let synth = await adapter.synthesize({ text: segment.text, voiceId });
-      ttsCostUsd += synth.costUsd;
-      let plan = planSegmentFit({
-        audioDurationSec: synth.durationSec,
-        targetDurationSec,
-        maxSpeed,
+    const batchMode = getTtsBatchMode();
+    const batches =
+      batchMode === "per_cue"
+        ? cues
+            .filter((cue) => cue.text.trim().length > 0)
+            .map((cue) => ({
+              segmentIndexes: [cue.index],
+              cues: [cue],
+              text: cue.text.trim(),
+              totalWindowSec: Math.max(cue.endSec - cue.startSec, 0.1),
+            }))
+        : batchCuesForTts(cues);
+
+    // Batch TTS: few OpenRouter calls, then cut audio back onto Phân đoạn windows.
+    // Timeline positions always come from segment startSec/endSec (not from TTS pacing).
+    this.logger.log(
+      `remix_tts ${jobId}: ${batchMode} mode — ${batches.length} TTS batches for ${translated.segments.length} cues`,
+    );
+
+    const ttsModel = getTtsModel();
+
+    for (const batch of batches) {
+      if (!batch.text) continue;
+
+      const cacheKey = ttsBatchCacheKey({
+        model: ttsModel,
+        voiceId,
+        text: batch.text,
       });
-
-      if (plan.action === "shorten") {
-        const shortened = await shortenSegmentText({
-          text: segment.text,
-          targetDurationSec,
+      const cached = await readTtsBatchCache(cacheKey);
+      let synth: {
+        buffer: Buffer;
+        durationSec: number;
+        costUsd: number;
+        contentType: "audio/mpeg";
+      };
+      if (cached) {
+        synth = {
+          buffer: cached.buffer,
+          durationSec: cached.durationSec,
+          costUsd: 0,
+          contentType: "audio/mpeg",
+        };
+        this.logger.log(
+          `remix_tts ${jobId}: cache hit for batch [${batch.segmentIndexes[0]}..${batch.segmentIndexes[batch.segmentIndexes.length - 1]}]`,
+        );
+      } else {
+        synth = await adapter.synthesize({ text: batch.text, voiceId });
+        await writeTtsBatchCache(cacheKey, {
+          buffer: synth.buffer,
+          durationSec: synth.durationSec,
         });
+      }
+      ttsCostUsd += synth.costUsd;
 
-        if (shortened.text && shortened.text !== segment.text) {
-          synth = await adapter.synthesize({ text: shortened.text, voiceId });
-          ttsCostUsd += synth.costUsd;
-          plan = planSegmentFit({
-            audioDurationSec: synth.durationSec,
-            targetDurationSec,
-            maxSpeed,
-          });
-        }
+      // Single-cue legacy path: optional local/LLM shorten + re-TTS.
+      if (batchMode === "per_cue" && batch.cues.length === 1) {
+        const segment = batch.cues[0]!;
+        const targetDurationSec = Math.max(
+          segment.endSec - segment.startSec,
+          0.1,
+        );
+        let plan = planSegmentFit({
+          audioDurationSec: synth.durationSec,
+          targetDurationSec,
+          maxSpeed,
+        });
+        let parentFitFailed = false;
 
         if (plan.action === "shorten") {
-          // Still doesn't fit after one shorten pass — record the failure but
-          // keep a best-effort clip (tempo capped at maxSpeed) for this window
-          // rather than dropping the line entirely.
-          parentFitFailed = true;
+          const shortened = await shortenSegmentText({
+            text: segment.text,
+            targetDurationSec,
+          });
+          if (shortened.text && shortened.text !== segment.text) {
+            synth = await adapter.synthesize({
+              text: shortened.text,
+              voiceId,
+            });
+            ttsCostUsd += synth.costUsd;
+            plan = planSegmentFit({
+              audioDurationSec: synth.durationSec,
+              targetDurationSec,
+              maxSpeed,
+            });
+          }
+          if (plan.action === "shorten") {
+            parentFitFailed = true;
+          }
         }
+
+        const fittedBuffer = await this.applyFitPlan(synth.buffer, plan);
+        timelineByIndex.set(segment.index, {
+          startSec: segment.startSec,
+          endSec: segment.endSec,
+          fittedMp3Buffer: fittedBuffer,
+        });
+        if (parentFitFailed) {
+          fitFailedIndexes.push(segment.index);
+        }
+        continue;
       }
 
-      const fittedBuffer = await this.applyFitPlan(synth.buffer, plan);
-      timelineSegments.push({
-        startSec: segment.startSec,
-        endSec: segment.endSec,
-        fittedMp3Buffer: fittedBuffer,
+      const slices = await splitBatchAudioToCues({
+        cues: batch.cues,
+        batchMp3: synth.buffer,
+        batchAudioDurationSec: synth.durationSec,
       });
 
-      if (parentFitFailed) {
-        fitFailedIndexes.push(index);
+      for (const slice of slices) {
+        const targetDurationSec = Math.max(
+          slice.endSec - slice.startSec,
+          0.1,
+        );
+        const plan = planSegmentFit({
+          audioDurationSec: slice.sliceDurationSec,
+          targetDurationSec,
+          maxSpeed,
+        });
+        if (plan.action === "shorten") {
+          fitFailedIndexes.push(slice.index);
+        }
+        const fittedBuffer = await this.applyFitPlan(slice.buffer, plan);
+        timelineByIndex.set(slice.index, {
+          startSec: slice.startSec,
+          endSec: slice.endSec,
+          fittedMp3Buffer: fittedBuffer,
+        });
       }
     }
+
+    // Empty-text cues are omitted; assemble fills gaps with silence between clips.
+    const timelineSegments = translated.segments
+      .map((_, index) => timelineByIndex.get(index))
+      .filter(
+        (segment): segment is NonNullable<typeof segment> =>
+          segment != null && segment.fittedMp3Buffer.length > 0,
+      );
 
     const lastSegment = translated.segments[translated.segments.length - 1];
     const totalDurationSec =
@@ -811,7 +916,7 @@ export class RemixProcessor extends WorkerHost {
     });
 
     this.logger.log(
-      `remix_tts ${jobId}: dub assembled for ${remakeId} (${timelineSegments.length} clips from ${translated.segments.length} cues, ${fitFailedIndexes.length} fit failures)`,
+      `remix_tts ${jobId}: dub assembled for ${remakeId} (${timelineSegments.length} clips from ${translated.segments.length} cues via ${batches.length} TTS batches, ${fitFailedIndexes.length} fit failures)`,
     );
   }
 

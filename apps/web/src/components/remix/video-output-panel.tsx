@@ -7,7 +7,13 @@ import type {
 } from "@factory/shared";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Alert, Badge, Button, Input, Label, Select, Spinner } from "@/components/ui";
-import { api, getErrorMessage, type ViralRemake } from "@/lib/api-client";
+import { costLabelForAction } from "@/components/remix/remake-cost-estimates";
+import {
+  api,
+  getErrorMessage,
+  type RemixCostEstimate,
+  type ViralRemake,
+} from "@/lib/api-client";
 
 const VOICE_OPTIONS: Array<{ id: string; label: string }> = [
   { id: "alloy", label: "Giọng A (alloy)" },
@@ -35,6 +41,7 @@ const renderPhaseTone = (
 type VideoOutputPanelProps = {
   remake: ViralRemake;
   pipelineReady: boolean;
+  costEstimate?: RemixCostEstimate | null;
   onRemakeChange: (remake: ViralRemake) => void;
   onError: (message: string) => void;
   onInfo: (message: string) => void;
@@ -43,12 +50,16 @@ type VideoOutputPanelProps = {
 export const VideoOutputPanel = ({
   remake,
   pipelineReady,
+  costEstimate = null,
   onRemakeChange,
   onError,
   onInfo,
 }: VideoOutputPanelProps) => {
   const renderPhase: RemixRenderPhase = remake.renderPhase ?? "idle";
   const ttsFitFailedIndexes = remake.ttsFitFailedIndexes ?? [];
+  const ttsCost = costLabelForAction(costEstimate, "tts");
+  const bannersCost = costLabelForAction(costEstimate, "banners");
+  const renderCost = costLabelForAction(costEstimate, "render");
   const [renderMode, setRenderMode] = useState<RemixRenderMode>(
     remake.renderMode ?? "audio_only",
   );
@@ -361,6 +372,9 @@ export const VideoOutputPanel = ({
           className="w-fit"
         >
           {pending === "banners" ? "Đang tạo…" : "Tạo nội dung banner (AI)"}
+          {bannersCost ? (
+            <span className="ml-1 opacity-70">({bannersCost})</span>
+          ) : null}
         </Button>
       </fieldset>
 
@@ -391,6 +405,7 @@ export const VideoOutputPanel = ({
           aria-label="Tạo audio lồng tiếng VI bằng TTS"
         >
           {isTtsBusy ? "Đang tạo audio…" : "Tạo audio VI"}
+          {ttsCost ? <span className="ml-1 opacity-70">({ttsCost})</span> : null}
         </Button>
 
         <input
@@ -418,6 +433,9 @@ export const VideoOutputPanel = ({
           aria-label="Render video xem trước"
         >
           {isRenderBusy ? "Đang render…" : "Render preview"}
+          {renderCost ? (
+            <span className="ml-1 opacity-70">({renderCost})</span>
+          ) : null}
         </Button>
 
         <Button

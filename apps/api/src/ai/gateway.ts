@@ -4,6 +4,7 @@ import {
   type ExtractChapterV1,
 } from "./prompts/extract.chapter.v1";
 import { REMIX_BANNERS_V1_KEY } from "./prompts/remix.banners.v1";
+import { logGatewayCall, truncateForGatewayLog } from "./openrouter-call-log";
 
 const EMBEDDING_DIMENSIONS = 1536;
 
@@ -180,6 +181,7 @@ const completeJsonWithOpenAi = async <T>(
   prompt: string,
   schema: JsonSchema<T>,
   system?: string,
+  callType?: string,
 ): Promise<{ data: T; tokensIn: number; tokensOut: number }> => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -188,24 +190,68 @@ const completeJsonWithOpenAi = async <T>(
 
   const model = process.env.LLM_MODEL ?? "gpt-4.1-mini";
   const baseUrl = process.env.AI_GATEWAY_URL ?? "https://api.openai.com/v1";
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  const started = Date.now();
+  const promptLog = truncateForGatewayLog(prompt);
+  const systemLog = system ? truncateForGatewayLog(system) : null;
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        response_format: { type: "json_object" },
+        messages: [
+          ...(system ? [{ role: "system", content: system }] : []),
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logGatewayCall({
+      kind: "llm_json",
+      type: callType,
       model,
-      response_format: { type: "json_object" },
-      messages: [
-        ...(system ? [{ role: "system", content: system }] : []),
-        { role: "user", content: prompt },
-      ],
-    }),
-  });
+      host: baseUrl,
+      status: "error",
+      durationMs: Date.now() - started,
+      input: {
+        system: systemLog?.text,
+        systemChars: systemLog?.length,
+        prompt: promptLog.text,
+        promptChars: promptLog.length,
+        promptTruncated: promptLog.truncated,
+      },
+      output: {},
+      error: message,
+    });
+    throw error;
+  }
 
   if (!response.ok) {
     const body = await response.text();
+    logGatewayCall({
+      kind: "llm_json",
+      type: callType,
+      model,
+      host: baseUrl,
+      status: "error",
+      durationMs: Date.now() - started,
+      input: {
+        system: systemLog?.text,
+        systemChars: systemLog?.length,
+        prompt: promptLog.text,
+        promptChars: promptLog.length,
+        promptTruncated: promptLog.truncated,
+      },
+      output: { httpStatus: response.status, body: truncateForGatewayLog(body).text },
+      error: `LLM request failed (${response.status})`,
+    });
     throw new Error(`LLM request failed (${response.status}): ${body}`);
   }
 
@@ -216,14 +262,55 @@ const completeJsonWithOpenAi = async <T>(
 
   const content = payload.choices[0]?.message?.content;
   if (!content) {
+    logGatewayCall({
+      kind: "llm_json",
+      type: callType,
+      model,
+      host: baseUrl,
+      status: "error",
+      durationMs: Date.now() - started,
+      input: {
+        prompt: promptLog.text,
+        promptChars: promptLog.length,
+      },
+      output: {},
+      error: "LLM returned empty content",
+    });
     throw new Error("LLM returned empty content");
   }
 
+  const tokensIn = payload.usage?.prompt_tokens ?? Math.ceil(prompt.length / 4);
+  const tokensOut =
+    payload.usage?.completion_tokens ?? Math.ceil(content.length / 4);
+  const contentLog = truncateForGatewayLog(content);
+
+  logGatewayCall({
+    kind: "llm_json",
+    type: callType,
+    model,
+    host: baseUrl,
+    status: "ok",
+    durationMs: Date.now() - started,
+    input: {
+      system: systemLog?.text,
+      systemChars: systemLog?.length,
+      prompt: promptLog.text,
+      promptChars: promptLog.length,
+      promptTruncated: promptLog.truncated,
+    },
+    output: {
+      content: contentLog.text,
+      contentChars: contentLog.length,
+      contentTruncated: contentLog.truncated,
+      tokensIn,
+      tokensOut,
+    },
+  });
+
   return {
     data: schema.parse(JSON.parse(content)),
-    tokensIn: payload.usage?.prompt_tokens ?? Math.ceil(prompt.length / 4),
-    tokensOut:
-      payload.usage?.completion_tokens ?? Math.ceil(content.length / 4),
+    tokensIn,
+    tokensOut,
   };
 };
 
@@ -310,6 +397,7 @@ const resolveFakeText = (prompt: string, type: string): string => {
 const completeTextWithOpenAi = async (
   prompt: string,
   system?: string,
+  callType?: string,
 ): Promise<{ text: string; tokensIn: number; tokensOut: number }> => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -318,23 +406,65 @@ const completeTextWithOpenAi = async (
 
   const model = process.env.LLM_MODEL ?? "gpt-4.1-mini";
   const baseUrl = process.env.AI_GATEWAY_URL ?? "https://api.openai.com/v1";
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  const started = Date.now();
+  const promptLog = truncateForGatewayLog(prompt);
+  const systemLog = system ? truncateForGatewayLog(system) : null;
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          ...(system ? [{ role: "system", content: system }] : []),
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logGatewayCall({
+      kind: "llm_text",
+      type: callType,
       model,
-      messages: [
-        ...(system ? [{ role: "system", content: system }] : []),
-        { role: "user", content: prompt },
-      ],
-    }),
-  });
+      host: baseUrl,
+      status: "error",
+      durationMs: Date.now() - started,
+      input: {
+        system: systemLog?.text,
+        prompt: promptLog.text,
+        promptChars: promptLog.length,
+        promptTruncated: promptLog.truncated,
+      },
+      output: {},
+      error: message,
+    });
+    throw error;
+  }
 
   if (!response.ok) {
     const body = await response.text();
+    logGatewayCall({
+      kind: "llm_text",
+      type: callType,
+      model,
+      host: baseUrl,
+      status: "error",
+      durationMs: Date.now() - started,
+      input: {
+        system: systemLog?.text,
+        prompt: promptLog.text,
+        promptChars: promptLog.length,
+        promptTruncated: promptLog.truncated,
+      },
+      output: { httpStatus: response.status, body: truncateForGatewayLog(body).text },
+      error: `LLM request failed (${response.status})`,
+    });
     throw new Error(`LLM request failed (${response.status}): ${body}`);
   }
 
@@ -345,14 +475,52 @@ const completeTextWithOpenAi = async (
 
   const content = payload.choices[0]?.message?.content;
   if (!content) {
+    logGatewayCall({
+      kind: "llm_text",
+      type: callType,
+      model,
+      host: baseUrl,
+      status: "error",
+      durationMs: Date.now() - started,
+      input: { prompt: promptLog.text, promptChars: promptLog.length },
+      output: {},
+      error: "LLM returned empty content",
+    });
     throw new Error("LLM returned empty content");
   }
 
+  const tokensIn = payload.usage?.prompt_tokens ?? Math.ceil(prompt.length / 4);
+  const tokensOut =
+    payload.usage?.completion_tokens ?? Math.ceil(content.length / 4);
+  const contentLog = truncateForGatewayLog(content);
+
+  logGatewayCall({
+    kind: "llm_text",
+    type: callType,
+    model,
+    host: baseUrl,
+    status: "ok",
+    durationMs: Date.now() - started,
+    input: {
+      system: systemLog?.text,
+      systemChars: systemLog?.length,
+      prompt: promptLog.text,
+      promptChars: promptLog.length,
+      promptTruncated: promptLog.truncated,
+    },
+    output: {
+      text: contentLog.text,
+      textChars: contentLog.length,
+      textTruncated: contentLog.truncated,
+      tokensIn,
+      tokensOut,
+    },
+  });
+
   return {
     text: content,
-    tokensIn: payload.usage?.prompt_tokens ?? Math.ceil(prompt.length / 4),
-    tokensOut:
-      payload.usage?.completion_tokens ?? Math.ceil(content.length / 4),
+    tokensIn,
+    tokensOut,
   };
 };
 
@@ -375,7 +543,11 @@ export const completeText = async (
     };
   }
 
-  const result = await completeTextWithOpenAi(prompt, options?.system);
+  const result = await completeTextWithOpenAi(
+    prompt,
+    options?.system,
+    options?.type,
+  );
   return {
     ...result,
     model,
@@ -386,7 +558,7 @@ export const completeText = async (
 export const completeJson = async <T>(
   prompt: string,
   schema: JsonSchema<T>,
-  options?: { system?: string },
+  options?: { system?: string; type?: string },
 ): Promise<CompleteJsonResult<T>> => {
   const model = process.env.LLM_MODEL ?? "gpt-4.1-mini";
   const tokensIn = Math.ceil(prompt.length / 4);
@@ -407,7 +579,12 @@ export const completeJson = async <T>(
     };
   }
 
-  const result = await completeJsonWithOpenAi(prompt, schema, options?.system);
+  const result = await completeJsonWithOpenAi(
+    prompt,
+    schema,
+    options?.system,
+    options?.type,
+  );
   return {
     ...result,
     model,

@@ -94,7 +94,14 @@ export const getTtsModel = (): string => {
 
 export const getTtsCostPer1kCharsUsd = (): number => {
   const configured = Number(process.env.REMIX_TTS_COST_PER_1K_CHARS_USD);
-  return Number.isFinite(configured) && configured >= 0 ? configured : 0.015;
+  if (Number.isFinite(configured) && configured >= 0) return configured;
+
+  // Grok Voice on OpenRouter bills ~$0.058–0.06 / 1k prompt chars (not $0.015).
+  const model = getTtsModel().toLowerCase();
+  if (model.includes("grok-voice") || model.includes("grok")) {
+    return 0.06;
+  }
+  return 0.015;
 };
 
 export const getDefaultTtsVoiceId = (): string => {

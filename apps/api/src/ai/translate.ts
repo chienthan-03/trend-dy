@@ -444,6 +444,7 @@ const translateLlmBatch = async (input: {
   const llm = await withTranslateLlmModel(() =>
     completeJson(prompt, translateTranscriptResponseSchema, {
       system: TRANSLATE_TRANSCRIPT_SYSTEM,
+      type: "remix_translate",
     }),
   );
 

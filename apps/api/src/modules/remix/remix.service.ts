@@ -33,6 +33,7 @@ import {
   type ClassifyRolesMode,
 } from "./tts/classify-segments";
 import { effectiveRole } from "./tts/segment-role";
+import { buildRemixCostEstimate } from "./remix-cost-estimate";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "./translate-config";
 
 export type TriggerRemixInput = {
@@ -178,6 +179,20 @@ export class RemixService {
       videoDurationSec: remake.videoDurationSec,
       scriptMode: remake.scriptMode,
     };
+  }
+
+  async getCostEstimate(id: string) {
+    const remake = await this.getRemake(id);
+    return buildRemixCostEstimate({
+      remakeId: remake.id,
+      videoDurationSec: remake.videoDurationSec,
+      sourceTranscript:
+        (remake.sourceTranscript as RemixTranscriptV1 | null) ?? null,
+      translatedTranscript:
+        (remake.sourceTranscriptTranslated as RemixTranscriptV1 | null) ??
+        null,
+      lastTtsCostUsd: remake.ttsCostUsd,
+    });
   }
 
   async updateRemake(id: string, dto: UpdateRemixDto): Promise<ViralRemake> {

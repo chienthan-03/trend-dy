@@ -78,6 +78,11 @@ export class RemixController {
     return this.remixService.getRemake(id);
   }
 
+  @Get(":id/cost-estimate")
+  getCostEstimate(@Param("id") id: string) {
+    return this.remixService.getCostEstimate(id);
+  }
+
   @Patch(":id")
   updateRemake(@Param("id") id: string, @Body() body: UpdateRemixDto) {
     return this.remixService.updateRemake(id, body);

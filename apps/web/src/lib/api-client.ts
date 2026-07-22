@@ -184,6 +184,40 @@ export type RemixTranscriptResponse = {
   scriptMode: string;
 };
 
+export type RemixCostActionId =
+  | "retranscribe"
+  | "retranslate"
+  | "tts"
+  | "classify"
+  | "banners"
+  | "render";
+
+export type RemixActionCostEstimate = {
+  action: RemixCostActionId;
+  label: string;
+  estimatedUsd: number | null;
+  available: boolean;
+  detail: string;
+  batchCount?: number;
+  charCount?: number;
+  durationSec?: number;
+};
+
+export type RemixCostEstimate = {
+  remakeId: string;
+  currency: "USD";
+  disclaimer: string;
+  rates: {
+    sttPerMinuteUsd: number;
+    ttsPer1kCharsUsd: number;
+    ttsModel: string;
+    ttsBatchMode: "batch" | "per_cue";
+    translateMode: string;
+  };
+  actions: RemixActionCostEstimate[];
+  lastTtsCostUsd: number | null;
+};
+
 export type Story = {
   id: string;
   projectId: string;
@@ -389,6 +423,8 @@ export const api = {
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/regenerate`, { method: "POST" }),
     getTranscript: (id: string) =>
       apiFetch<RemixTranscriptResponse>(`/viral/remix/${id}/transcript`),
+    getCostEstimate: (id: string) =>
+      apiFetch<RemixCostEstimate>(`/viral/remix/${id}/cost-estimate`),
     retranscribe: (id: string) =>
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/retranscribe`, {
         method: "POST",

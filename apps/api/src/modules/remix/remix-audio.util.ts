@@ -37,9 +37,21 @@ export const buildMinimalWav = (durationSec = 1): Buffer => {
   return Buffer.concat([header, Buffer.alloc(dataSize)]);
 };
 
-export const runFfmpeg = (ffmpegPath: string, args: string[]): Promise<void> =>
+export type RunFfmpegOptions = {
+  /** Working directory for relative input paths (keeps Windows argv under limits). */
+  cwd?: string;
+};
+
+export const runFfmpeg = (
+  ffmpegPath: string,
+  args: string[],
+  options: RunFfmpegOptions = {},
+): Promise<void> =>
   new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ffmpegPath, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: options.cwd,
+    });
     let stderr = "";
 
     proc.stderr?.on("data", (chunk: Buffer) => {
