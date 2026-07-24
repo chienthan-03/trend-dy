@@ -20,6 +20,29 @@ const VOICE_OPTIONS: Array<{ id: string; label: string }> = [
   { id: "nova", label: "Giọng B (nova)" },
 ];
 
+type TtsEngine = "piper" | "live";
+
+const ENGINE_OPTIONS: Array<{ id: TtsEngine; label: string }> = [
+  { id: "piper", label: "Local (Ngọc Huyền)" },
+  { id: "live", label: "Live (Grok)" },
+];
+
+const ENGINE_HINTS: Record<TtsEngine, string> = {
+  piper: "Chạy local, miễn phí.",
+  live: "Dùng credit — tính phí theo ký tự.",
+};
+
+/** Bootstrap: prefer the persisted engine, else server default — never silently assume live. */
+const resolveInitialEngine = (
+  remake: ViralRemake,
+  costEstimate: RemixCostEstimate | null,
+): TtsEngine => {
+  if (remake.ttsEngine === "piper" || remake.ttsEngine === "live") {
+    return remake.ttsEngine;
+  }
+  return costEstimate?.defaultTtsEngine ?? "piper";
+};
+
 const RENDER_PHASE_LABELS: Record<RemixRenderPhase, string> = {
   idle: "Chưa xử lý",
   tts: "Đang tạo audio VI…",
@@ -57,15 +80,19 @@ export const VideoOutputPanel = ({
 }: VideoOutputPanelProps) => {
   const renderPhase: RemixRenderPhase = remake.renderPhase ?? "idle";
   const ttsFitFailedIndexes = remake.ttsFitFailedIndexes ?? [];
-  const ttsCost = costLabelForAction(costEstimate, "tts");
-  const bannersCost = costLabelForAction(costEstimate, "banners");
-  const renderCost = costLabelForAction(costEstimate, "render");
   const [renderMode, setRenderMode] = useState<RemixRenderMode>(
     remake.renderMode ?? "audio_only",
   );
   const [voiceId, setVoiceId] = useState<string>(
     remake.ttsVoiceId || VOICE_OPTIONS[0].id,
   );
+  const [engine, setEngine] = useState<TtsEngine>(() =>
+    resolveInitialEngine(remake, costEstimate),
+  );
+  const [engineCostEstimate, setEngineCostEstimate] =
+    useState<RemixCostEstimate | null>(null);
+  const [engineCostLoading, setEngineCostLoading] = useState(false);
+  const engineTouchedRef = useRef(false);
   const [bannerHeader, setBannerHeader] = useState(remake.bannerJson?.header ?? "");
   const [bannerBottom, setBannerBottom] = useState(remake.bannerJson?.bottom ?? "");
   const [pending, setPending] = useState<string | null>(null);
@@ -79,7 +106,25 @@ export const VideoOutputPanel = ({
     setVoiceId(remake.ttsVoiceId || VOICE_OPTIONS[0].id);
     setBannerHeader(remake.bannerJson?.header ?? "");
     setBannerBottom(remake.bannerJson?.bottom ?? "");
-  }, [remake]);
+    engineTouchedRef.current = false;
+    setEngine(resolveInitialEngine(remake, costEstimate));
+    setEngineCostEstimate(null);
+  }, [remake, costEstimate]);
+
+  // Once the server's default engine arrives, adopt it — but only while the
+  // remake has no persisted engine yet and the user hasn't touched the toggle.
+  useEffect(() => {
+    if (engineTouchedRef.current) return;
+    if (remake.ttsEngine === "piper" || remake.ttsEngine === "live") return;
+    if (!costEstimate) return;
+    setEngine(costEstimate.defaultTtsEngine);
+  }, [costEstimate, remake.ttsEngine]);
+
+  const effectiveCostEstimate =
+    engineCostEstimate?.resolvedEngine === engine ? engineCostEstimate : costEstimate;
+  const ttsCost = costLabelForAction(effectiveCostEstimate, "tts");
+  const bannersCost = costLabelForAction(costEstimate, "banners");
+  const renderCost = costLabelForAction(costEstimate, "render");
 
   const isBannerMode = renderMode === "banner_audio";
   const isTtsBusy = renderPhase === "tts" || pending === "tts";
@@ -138,16 +183,40 @@ export const VideoOutputPanel = ({
     }
   };
 
+  const handleEngineChange = async (nextEngine: TtsEngine) => {
+    engineTouchedRef.current = true;
+    setEngine(nextEngine);
+    if (costEstimate?.resolvedEngine === nextEngine) {
+      setEngineCostEstimate(null);
+      return;
+    }
+    setEngineCostLoading(true);
+    try {
+      const data = await api.remix.getCostEstimate(remake.id, {
+        engine: nextEngine,
+      });
+      setEngineCostEstimate(data);
+    } catch (err) {
+      onError(getErrorMessage(err));
+    } finally {
+      setEngineCostLoading(false);
+    }
+  };
+
   const handleGenerateTts = async () => {
     setPending("tts");
     try {
-      const result = await api.remix.enqueueTts(remake.id, { voiceId });
+      const result = await api.remix.enqueueTts(remake.id, {
+        engine,
+        voiceId: engine === "live" ? voiceId : undefined,
+      });
       onInfo(`Đã xếp hàng tạo audio VI (job ${result.jobId}).`);
       onRemakeChange({
         ...remake,
         renderPhase: "tts",
         renderError: null,
         ttsFitFailedIndexes: [],
+        ttsEngine: engine,
       });
     } catch (err) {
       onError(getErrorMessage(err));
@@ -320,13 +389,34 @@ export const VideoOutputPanel = ({
         </div>
 
         <div className="grid gap-1 sm:max-w-xs">
-          <Label htmlFor="tts-voice">Giọng đọc</Label>
+          <Label htmlFor="tts-engine">Công cụ TTS</Label>
+          <Select
+            id="tts-engine"
+            value={engine}
+            onChange={(event) => handleEngineChange(event.target.value as TtsEngine)}
+            disabled={engineCostLoading}
+            aria-label="Chọn công cụ tạo audio VI"
+          >
+            {ENGINE_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
+          <p className="text-xs text-gray-500">{ENGINE_HINTS[engine]}</p>
+        </div>
+
+        <div
+          className="grid gap-1 sm:max-w-xs"
+          hidden={engine === "piper"}
+        >
+          <Label htmlFor="tts-voice">Giọng đọc (Live)</Label>
           <Select
             id="tts-voice"
             value={voiceId}
             onChange={(event) => handleVoiceChange(event.target.value)}
-            disabled={pending === "voice"}
-            aria-label="Chọn giọng đọc TTS"
+            disabled={pending === "voice" || engine === "piper"}
+            aria-label="Chọn giọng đọc TTS Live"
           >
             {VOICE_OPTIONS.map((voice) => (
               <option key={voice.id} value={voice.id}>

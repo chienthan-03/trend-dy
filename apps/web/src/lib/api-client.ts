@@ -158,6 +158,7 @@ export type ViralRemake = {
   renderOutputKey: string | null;
   bannerJson: RemixBannerJson | null;
   ttsVoiceId: string | null;
+  ttsEngine?: "piper" | "live" | null;
   ttsFitFailedIndexes: number[];
   classifyWarning?: string | null;
   timingWarning?: string | null;
@@ -216,6 +217,10 @@ export type RemixCostEstimate = {
   };
   actions: RemixActionCostEstimate[];
   lastTtsCostUsd: number | null;
+  /** Env default collapsed for UI display — `fake` reads as Piper (local, $0). */
+  defaultTtsEngine: "piper" | "live";
+  /** Engine that would actually run right now (override > persisted remake > env default). */
+  resolvedEngine: "piper" | "live";
 };
 
 export type Story = {
@@ -423,8 +428,14 @@ export const api = {
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/regenerate`, { method: "POST" }),
     getTranscript: (id: string) =>
       apiFetch<RemixTranscriptResponse>(`/viral/remix/${id}/transcript`),
-    getCostEstimate: (id: string) =>
-      apiFetch<RemixCostEstimate>(`/viral/remix/${id}/cost-estimate`),
+    getCostEstimate: (id: string, options?: { engine?: "piper" | "live" }) => {
+      const query = new URLSearchParams();
+      if (options?.engine) query.set("engine", options.engine);
+      const qs = query.toString();
+      return apiFetch<RemixCostEstimate>(
+        `/viral/remix/${id}/cost-estimate${qs ? `?${qs}` : ""}`,
+      );
+    },
     retranscribe: (id: string) =>
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/retranscribe`, {
         method: "POST",
@@ -460,7 +471,10 @@ export const api = {
       apiFetch<RemixBannerJson>(`/viral/remix/${id}/banners/generate`, {
         method: "POST",
       }),
-    enqueueTts: (id: string, body?: { voiceId?: string }) =>
+    enqueueTts: (
+      id: string,
+      body?: { voiceId?: string; engine?: "piper" | "live" },
+    ) =>
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/tts`, {
         method: "POST",
         body: JSON.stringify(body ?? {}),
