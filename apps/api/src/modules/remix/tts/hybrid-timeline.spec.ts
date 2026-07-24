@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { planHybridTimeline } from "./hybrid-timeline";
+import { markHybridLocks, planHybridTimeline } from "./hybrid-timeline";
 
 const opts = { blockGapSec: 1, lockGraceSec: 0.5, maxSpeed: 1.25 };
+
+describe("markHybridLocks", () => {
+  it("locks the first cue, source cues, and narration after a block gap", () => {
+    const locked = markHybridLocks(
+      [
+        { index: 0, startSec: 0, endSec: 0.5, role: "narration" },
+        { index: 1, startSec: 0.5, endSec: 2, role: "narration" },
+        { index: 2, startSec: 5, endSec: 6, role: "source" },
+      ],
+      { blockGapSec: 1 },
+    );
+
+    expect(locked.has(0)).toBe(true); // first cue always locked
+    expect(locked.has(1)).toBe(false); // contiguous narration, no gap
+    expect(locked.has(2)).toBe(true); // source is always locked
+  });
+});
 
 describe("planHybridTimeline", () => {
   it("keeps ZH start for short narration (silence gap, no early pull)", () => {

@@ -854,6 +854,11 @@ describe("RemixProcessor (Full Script Mode)", () => {
     }>;
     const narrB = segs[1]!;
     expect(narrB.endSec).toBeGreaterThan(2);
+
+    // Unlocked narration retimes instead of losing words to an LLM shorten —
+    // segment B would trigger `plan.action === "shorten"` against its ZH
+    // window (1.5s) if it were pinned, but hybrid must skip shorten for it.
+    expect(shortenSegmentText).not.toHaveBeenCalled();
   });
 
   it("handleTts strict keeps ZH startSec for narration", async () => {

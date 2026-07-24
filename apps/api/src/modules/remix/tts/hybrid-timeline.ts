@@ -23,16 +23,25 @@ export type HybridTimelineOptions = {
   videoEndSec?: number;
 };
 
+export type HybridLockCueIn = Pick<HybridCueIn, "index" | "startSec" | "endSec" | "role">;
+
+export type HybridLockOptions = Pick<HybridTimelineOptions, "blockGapSec">;
+
 const EPS = 0.1;
 
-export const planHybridTimeline = (
-  cues: HybridCueIn[],
-  options: HybridTimelineOptions,
-): HybridCueOut[] => {
+/**
+ * Which cues are lock-anchored to their ZH window: the first cue, any
+ * source-role cue, and narration that starts a new "block" after a silence
+ * gap >= `blockGapSec`. Depends only on cue timing/role — not audio
+ * duration — so callers can compute this before TTS synthesis runs.
+ */
+export const markHybridLocks = (
+  cues: HybridLockCueIn[],
+  options: HybridLockOptions,
+): Set<number> => {
   const sorted = [...cues].sort(
     (a, b) => a.startSec - b.startSec || a.index - b.index,
   );
-  if (sorted.length === 0) return [];
 
   const lockedIdx = new Set<number>();
   sorted.forEach((cue, i) => {
@@ -46,6 +55,20 @@ export const planHybridTimeline = (
       }
     }
   });
+
+  return lockedIdx;
+};
+
+export const planHybridTimeline = (
+  cues: HybridCueIn[],
+  options: HybridTimelineOptions,
+): HybridCueOut[] => {
+  const sorted = [...cues].sort(
+    (a, b) => a.startSec - b.startSec || a.index - b.index,
+  );
+  if (sorted.length === 0) return [];
+
+  const lockedIdx = markHybridLocks(sorted, { blockGapSec: options.blockGapSec });
 
   const lockStarts = sorted
     .filter((c) => lockedIdx.has(c.index))

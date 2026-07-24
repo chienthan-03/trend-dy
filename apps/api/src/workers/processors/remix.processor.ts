@@ -40,7 +40,10 @@ import {
   type CueForBatch,
 } from "../../modules/remix/tts/batch-cues-for-tts";
 import { splitBatchAudioToCues } from "../../modules/remix/tts/split-batch-audio";
-import { planHybridTimeline } from "../../modules/remix/tts/hybrid-timeline";
+import {
+  markHybridLocks,
+  planHybridTimeline,
+} from "../../modules/remix/tts/hybrid-timeline";
 import {
   smartBatchCuesForTts,
   splitSmartBatchAudioToCues,
@@ -773,6 +776,14 @@ export class RemixProcessor extends WorkerHost {
     // Hybrid only applies to full soundtrack replace — `mix` narration-only
     // dub always pins to the ZH window it ducks under.
     const useHybrid = getTtsTimingMode() === "hybrid" && audioMode === "replace";
+    const hybridOptions = useHybrid
+      ? {
+          blockGapSec: getHybridBlockGapSec(),
+          lockGraceSec: getHybridLockGraceSec(),
+          maxSpeed,
+          videoEndSec: remake.videoDurationSec ?? undefined,
+        }
+      : null;
 
     type RawClip = {
       buffer: Buffer;
@@ -800,29 +811,21 @@ export class RemixProcessor extends WorkerHost {
         endSec: segment.endSec,
       }));
 
-    // Which cues will be lock-anchored to their ZH window (independent of
-    // audio duration) — decides whether the per_cue legacy path is allowed
-    // to LLM-shorten during collect (hybrid unlocked narration retimes
-    // instead, so shortening it during collect would be wasted work).
+    // Which cues will be lock-anchored to their ZH window — decides whether
+    // the per_cue legacy path is allowed to LLM-shorten during collect
+    // (hybrid unlocked narration retimes instead, so shortening it during
+    // collect would be wasted work). Depends only on timing/role, so this
+    // can run before TTS synthesis (and before `planHybridTimeline`, which
+    // additionally needs audio durations to place unlocked cues).
     const hybridLockedIndexes = useHybrid
-      ? new Set(
-          planHybridTimeline(
-            cues.map((cue) => ({
-              index: cue.index,
-              startSec: cue.startSec,
-              endSec: cue.endSec,
-              role: effectiveRole(translated.segments[cue.index]!),
-              audioDurationSec: 0,
-            })),
-            {
-              blockGapSec: getHybridBlockGapSec(),
-              lockGraceSec: getHybridLockGraceSec(),
-              maxSpeed,
-              videoEndSec: remake.videoDurationSec ?? undefined,
-            },
-          )
-            .filter((out) => out.locked)
-            .map((out) => out.index),
+      ? markHybridLocks(
+          cues.map((cue) => ({
+            index: cue.index,
+            startSec: cue.startSec,
+            endSec: cue.endSec,
+            role: effectiveRole(translated.segments[cue.index]!),
+          })),
+          { blockGapSec: hybridOptions!.blockGapSec },
         )
       : null;
 
@@ -963,21 +966,18 @@ export class RemixProcessor extends WorkerHost {
       }
     }
 
-    const hybridOuts = useHybrid
-      ? planHybridTimeline(
-          [...rawByIndex.entries()].map(([index, raw]) => ({
-            index,
-            startSec: raw.zhStartSec,
-            endSec: raw.zhEndSec,
-            role: raw.role,
-            audioDurationSec: raw.audioDurationSec,
-          })),
-          {
-            blockGapSec: getHybridBlockGapSec(),
-            lockGraceSec: getHybridLockGraceSec(),
-            maxSpeed,
-            videoEndSec: remake.videoDurationSec ?? undefined,
-          },
+    const hybridOutByIndex = hybridOptions
+      ? new Map(
+          planHybridTimeline(
+            [...rawByIndex.entries()].map(([index, raw]) => ({
+              index,
+              startSec: raw.zhStartSec,
+              endSec: raw.zhEndSec,
+              role: raw.role,
+              audioDurationSec: raw.audioDurationSec,
+            })),
+            hybridOptions,
+          ).map((out) => [out.index, out] as const),
         )
       : null;
 
@@ -988,7 +988,7 @@ export class RemixProcessor extends WorkerHost {
     }
 
     for (const [index, raw] of rawByIndex) {
-      const planned = hybridOuts?.find((out) => out.index === index);
+      const planned = hybridOutByIndex?.get(index);
       const startSec = planned?.startSec ?? raw.zhStartSec;
       const fitTargetSec =
         planned?.fitTargetSec ?? Math.max(raw.zhEndSec - raw.zhStartSec, 0.1);
@@ -1003,7 +1003,7 @@ export class RemixProcessor extends WorkerHost {
       }
       timelineByIndex.set(index, {
         startSec,
-        endSec: startSec + fitTargetSec,
+        endSec: planned?.endSec ?? startSec + fitTargetSec,
         fittedMp3Buffer: fitted.buffer,
       });
     }
