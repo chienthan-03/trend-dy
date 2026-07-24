@@ -13,6 +13,8 @@ import { translateTranscript } from "../../ai/translate";
 import { extractAudioForStt } from "../../modules/remix/remix-audio.util";
 import { createRemixMediaAdapter } from "../../modules/remix/remix-media.adapter";
 import * as assembleDub from "../../modules/remix/tts/assemble-dub";
+import * as batchCuesForTtsModule from "../../modules/remix/tts/batch-cues-for-tts";
+import * as smartBatchCuesModule from "../../modules/remix/tts/smart-batch-cues";
 import { FakeTtsAdapter } from "../../modules/remix/tts/fake-tts.adapter";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 
@@ -125,6 +127,50 @@ const { classifyTranslatedSegmentsMock } = vi.hoisted(() => ({
 
 vi.mock("../../modules/remix/tts/classify-segments", () => ({
   classifyTranslatedSegments: classifyTranslatedSegmentsMock,
+}));
+
+// Piper/live engine tests stub the CLI/HTTP adapters (never invoked for the
+// default `fake` engine tests) so no real subprocess/network call happens.
+const { httpCtorSpy, httpSynthesizeMock } = vi.hoisted(() => ({
+  httpCtorSpy: vi.fn(),
+  httpSynthesizeMock: vi.fn(async (input: { text: string; voiceId: string }) => ({
+    buffer: Buffer.from(`http:${input.text}`),
+    contentType: "audio/mpeg" as const,
+    durationSec: 2,
+    costUsd: 0.01,
+  })),
+}));
+
+vi.mock("../../modules/remix/tts/http-tts.adapter", () => ({
+  HttpTtsAdapter: class {
+    constructor() {
+      httpCtorSpy();
+    }
+    synthesize(input: { text: string; voiceId: string }) {
+      return httpSynthesizeMock(input);
+    }
+  },
+}));
+
+const { piperCtorSpy, piperSynthesizeMock } = vi.hoisted(() => ({
+  piperCtorSpy: vi.fn(),
+  piperSynthesizeMock: vi.fn(async (input: { text: string; voiceId: string }) => ({
+    buffer: Buffer.from(`piper:${input.text}`),
+    contentType: "audio/mpeg" as const,
+    durationSec: 2,
+    costUsd: 0,
+  })),
+}));
+
+vi.mock("../../modules/remix/tts/piper-tts.adapter", () => ({
+  PiperTtsAdapter: class {
+    constructor() {
+      piperCtorSpy();
+    }
+    synthesize(input: { text: string; voiceId: string }) {
+      return piperSynthesizeMock(input);
+    }
+  },
 }));
 
 describe("RemixProcessor (Full Script Mode)", () => {
@@ -823,6 +869,123 @@ describe("RemixProcessor (Full Script Mode)", () => {
         data: { classifyWarning: "classify failed" },
       }),
     );
+  });
+
+  it("handleTts resolves engine=piper from remake.ttsEngine, smart-batches, normalizes text, and never constructs HttpTtsAdapter", async () => {
+    const smartSpy = vi.spyOn(smartBatchCuesModule, "smartBatchCuesForTts");
+    const ratioSpy = vi.spyOn(batchCuesForTtsModule, "batchCuesForTts");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsEngine: "piper",
+      videoDurationSec: 6,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 6,
+        segments: [
+          { startSec: 0, endSec: 3, text: "Xin chào 50%", role: "narration", roleSource: "manual" },
+          { startSec: 3, endSec: 6, text: "Tạm biệt", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "Xin chào 50% Tạm biệt",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_piper",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(smartSpy).toHaveBeenCalled();
+    expect(ratioSpy).not.toHaveBeenCalled();
+    expect(httpCtorSpy).not.toHaveBeenCalled();
+    expect(piperCtorSpy).toHaveBeenCalledTimes(1);
+    expect(piperSynthesizeMock).toHaveBeenCalled();
+
+    // Text sent to Piper is normalized (digits/percent spelled out for VI TTS).
+    const synthesizeCall = piperSynthesizeMock.mock.calls[0]![0] as {
+      text: string;
+      voiceId: string;
+    };
+    expect(synthesizeCall.text).toContain("phần trăm");
+    expect(synthesizeCall.text).not.toMatch(/\d/);
+    // Piper ignores the OpenRouter voiceId — cache/synthesize key off the model stem.
+    expect(synthesizeCall.voiceId).toBe("Ngọc Huyền (mới)");
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          dubSource: "tts",
+          renderPhase: "tts_ready",
+          ttsEngine: "piper",
+        }),
+      }),
+    );
+
+    smartSpy.mockRestore();
+    ratioSpy.mockRestore();
+  });
+
+  it("handleTts resolves engine=live from payload.engine (overriding remake.ttsEngine), uses ratio batch, and never constructs PiperTtsAdapter", async () => {
+    const smartSpy = vi.spyOn(smartBatchCuesModule, "smartBatchCuesForTts");
+    const ratioSpy = vi.spyOn(batchCuesForTtsModule, "batchCuesForTts");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      // Remake was last run with piper — payload.engine must win for this job.
+      ttsEngine: "piper",
+      videoDurationSec: 6,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 6,
+        segments: [
+          { startSec: 0, endSec: 3, text: "Xin chào", role: "narration", roleSource: "manual" },
+          { startSec: 3, endSec: 6, text: "Tạm biệt", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "Xin chào Tạm biệt",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_live",
+      name: "remix_tts",
+      data: { remakeId: "remake_1", engine: "live" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(ratioSpy).toHaveBeenCalled();
+    expect(smartSpy).not.toHaveBeenCalled();
+    expect(piperCtorSpy).not.toHaveBeenCalled();
+    expect(httpCtorSpy).toHaveBeenCalledTimes(1);
+    expect(httpSynthesizeMock).toHaveBeenCalled();
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          dubSource: "tts",
+          renderPhase: "tts_ready",
+          ttsEngine: "live",
+        }),
+      }),
+    );
+
+    smartSpy.mockRestore();
+    ratioSpy.mockRestore();
   });
 
   it("remix_tts failure only marks renderPhase/renderError, not the script pipeline", async () => {

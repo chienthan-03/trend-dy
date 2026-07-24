@@ -22,10 +22,11 @@ import { extractAudioForStt } from "../../modules/remix/remix-audio.util";
 import {
   getDefaultTtsVoiceId,
   getMediaTtlDays,
+  getPiperModelStem,
   getRemixScriptMode,
   getTtsMaxSpeed,
-  getTtsMode,
   getTtsModel,
+  resolveTtsEngine,
 } from "../../modules/remix/remix-config";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "../../modules/remix/translate-config";
 import { assembleDubTimeline } from "../../modules/remix/tts/assemble-dub";
@@ -35,6 +36,10 @@ import {
   type CueForBatch,
 } from "../../modules/remix/tts/batch-cues-for-tts";
 import { splitBatchAudioToCues } from "../../modules/remix/tts/split-batch-audio";
+import {
+  smartBatchCuesForTts,
+  splitSmartBatchAudioToCues,
+} from "../../modules/remix/tts/smart-batch-cues";
 import {
   applyPad,
   applyTempo,
@@ -50,6 +55,7 @@ import {
   writeTtsBatchCache,
 } from "../../modules/remix/tts/tts-batch-cache";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
+import { normalizeVietnameseForTts } from "../../modules/remix/tts/viet-normalize";
 
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
 import { RemixRenderService } from "../../modules/remix/remix-render.service";
@@ -98,6 +104,7 @@ type RemixGeneratePayload = {
 type RemixTtsPayload = {
   remakeId: string;
   voiceId?: string;
+  engine?: string;
 };
 
 type RemixRenderPayload = {
@@ -119,6 +126,15 @@ const toSourceSnapshot = (detail: DouyinVideoDetail): Prisma.InputJsonValue => (
   playUrl: detail.playUrl ?? null,
   rawPayload: detail.rawPayload as Prisma.InputJsonValue,
 });
+
+/** Piper reads normalized text; fall back to raw text if the normalizer throws. */
+const safeNormalizeForPiper = (text: string): string => {
+  try {
+    return normalizeVietnameseForTts(text);
+  } catch {
+    return text;
+  }
+};
 
 const withRemixLlmModel = async <T>(fn: () => Promise<T>): Promise<T> => {
   const remixModel = process.env.REMIX_LLM_MODEL?.trim();
@@ -682,6 +698,14 @@ export class RemixProcessor extends WorkerHost {
     }
 
     const remake = await this.remixService.getRemake(remakeId);
+
+    const engine = resolveTtsEngine({
+      payloadEngine: typeof payload.engine === "string" ? payload.engine : null,
+      remakeEngine: remake.ttsEngine,
+    });
+    const adapter = await createTtsAdapter(engine);
+    const isPiper = engine === "piper";
+
     let translated =
       remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
     if (!translated) {
@@ -724,9 +748,12 @@ export class RemixProcessor extends WorkerHost {
       }
     }
 
-    const adapter = await createTtsAdapter();
     const voiceId =
       voiceIdOverride || remake.ttsVoiceId || getDefaultTtsVoiceId();
+    // Piper ignores the OpenRouter voice selection entirely — it always speaks
+    // through the fixed Ngọc Huyền model files, so cache/synthesize use the
+    // model stem instead of the user-facing voiceId.
+    const engineVoiceId = isPiper ? getPiperModelStem() : voiceId;
     const maxSpeed = getTtsMaxSpeed();
 
     const fitFailedIndexes: number[] = [];
@@ -743,9 +770,12 @@ export class RemixProcessor extends WorkerHost {
       endSec: segment.endSec,
     }));
 
-    const batchMode = getTtsBatchMode();
-    const batches =
-      batchMode === "per_cue"
+    // Piper never mid-word ratio-splits: always smart-batch by sentence/gap.
+    // Live/fake keep the existing ratio batch (+ optional per_cue legacy mode).
+    const batchMode = isPiper ? "smart" : getTtsBatchMode();
+    const batches = isPiper
+      ? smartBatchCuesForTts(cues)
+      : batchMode === "per_cue"
         ? cues
             .filter((cue) => cue.text.trim().length > 0)
             .map((cue) => ({
@@ -756,22 +786,28 @@ export class RemixProcessor extends WorkerHost {
             }))
         : batchCuesForTts(cues);
 
-    // Batch TTS: few OpenRouter calls, then cut audio back onto Phân đoạn windows.
+    // Batch TTS: few TTS calls, then cut audio back onto Phân đoạn windows.
     // Timeline positions always come from segment startSec/endSec (not from TTS pacing).
     this.logger.log(
-      `remix_tts ${jobId}: ${batchMode} mode — ${batches.length} TTS batches for ${translated.segments.length} cues`,
+      `remix_tts ${jobId}: ${engine} engine, ${batchMode} mode — ${batches.length} TTS batches for ${translated.segments.length} cues`,
     );
 
-    const ttsModel = getTtsModel();
+    const ttsModel = isPiper ? `piper:${getPiperModelStem()}` : getTtsModel();
 
     for (const batch of batches) {
       if (!batch.text) continue;
 
+      // Piper reads/caches the normalized text (numbers, Latin loanwords, %) —
+      // falls back to raw text if the normalizer throws on unexpected input.
+      const synthesizeText = isPiper
+        ? safeNormalizeForPiper(batch.text)
+        : batch.text;
+
       const cacheKey = ttsBatchCacheKey({
-        engine: getTtsMode(),
+        engine,
         model: ttsModel,
-        voiceId,
-        text: batch.text,
+        voiceId: engineVoiceId,
+        text: synthesizeText,
       });
       const cached = await readTtsBatchCache(cacheKey);
       let synth: {
@@ -791,7 +827,10 @@ export class RemixProcessor extends WorkerHost {
           `remix_tts ${jobId}: cache hit for batch [${batch.segmentIndexes[0]}..${batch.segmentIndexes[batch.segmentIndexes.length - 1]}]`,
         );
       } else {
-        synth = await adapter.synthesize({ text: batch.text, voiceId });
+        synth = await adapter.synthesize({
+          text: synthesizeText,
+          voiceId: engineVoiceId,
+        });
         await writeTtsBatchCache(cacheKey, {
           buffer: synth.buffer,
           durationSec: synth.durationSec,
@@ -847,11 +886,17 @@ export class RemixProcessor extends WorkerHost {
         continue;
       }
 
-      const slices = await splitBatchAudioToCues({
-        cues: batch.cues,
-        batchMp3: synth.buffer,
-        batchAudioDurationSec: synth.durationSec,
-      });
+      const slices = isPiper
+        ? await splitSmartBatchAudioToCues({
+            cues: batch.cues,
+            batchMp3: synth.buffer,
+            batchAudioDurationSec: synth.durationSec,
+          })
+        : await splitBatchAudioToCues({
+            cues: batch.cues,
+            batchMp3: synth.buffer,
+            batchAudioDurationSec: synth.durationSec,
+          });
 
       for (const slice of slices) {
         const targetDurationSec = Math.max(
@@ -905,6 +950,10 @@ export class RemixProcessor extends WorkerHost {
         ttsCostUsd,
         ttsFitFailedIndexes: fitFailedIndexes,
         renderPhase: "tts_ready",
+        // `fake` is CI/env-only and never persisted as a real choice — keep
+        // whatever engine the remake already had (or null) so the UI never
+        // flips to a fake value.
+        ttsEngine: engine === "fake" ? remake.ttsEngine : engine,
       },
     });
 
@@ -912,7 +961,7 @@ export class RemixProcessor extends WorkerHost {
       data: {
         jobId,
         provider: "tts",
-        model: getTtsModel(),
+        model: ttsModel,
         costUsd: ttsCostUsd,
       },
     });
