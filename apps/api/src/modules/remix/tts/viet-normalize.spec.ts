@@ -12,6 +12,12 @@ describe("normalizeVietnameseForTts", () => {
     expect(out.toLowerCase()).not.toContain("algorithm");
   });
 
+  it("phoneticizes AI acronym but not Vietnamese ai", () => {
+    expect(normalizeVietnameseForTts("dùng AI")).toMatch(/ây ai/);
+    expect(normalizeVietnameseForTts("ai đó")).toBe("ai đó");
+    expect(normalizeVietnameseForTts("với ai")).toBe("với ai");
+  });
+
   it("returns trimmed empty for blank input", () => {
     expect(normalizeVietnameseForTts("   ")).toBe("");
   });

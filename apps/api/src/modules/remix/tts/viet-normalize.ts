@@ -18,7 +18,6 @@ const LATIN_TOKENS: Record<string, string> = {
   youtube: "iu túp",
   tiktok: "típ tốc",
   facebook: "phét búc",
-  ai: "ây ai",
 };
 
 const spellOnes = (n: number): string => DIGITS[n] ?? String(n);
@@ -71,6 +70,7 @@ const replaceLatinTokens = (text: string): string => {
     const regex = new RegExp(`\\b${token}\\b`, "gi");
     result = result.replace(regex, replacement);
   }
+  result = result.replace(/\bAI\b/g, "ây ai");
   return result;
 };
 
