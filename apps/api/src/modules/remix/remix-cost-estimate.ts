@@ -116,7 +116,10 @@ export const buildRemixCostEstimate = (input: {
   const resolvedEngineForDisplay: "piper" | "live" =
     resolvedEngine === "live" ? "live" : "piper";
   const isPiperResolved = resolvedEngine === "piper";
-  const isLiveResolved = resolvedEngine === "live" && ttsMode === "live";
+  // Cost follows the engine the job will actually run (payload/remake override
+  // wins over env). Do not require REMIX_TTS_MODE=live — UI can select Live
+  // while env default remains fake/piper.
+  const isLiveResolved = resolvedEngine === "live";
 
   const durationSec =
     input.videoDurationSec ??

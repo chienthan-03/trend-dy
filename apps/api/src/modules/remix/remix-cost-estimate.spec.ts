@@ -154,8 +154,9 @@ describe("buildRemixCostEstimate", () => {
     expect(estimate.resolvedEngine).toBe("piper");
   });
 
-  it("returns $0 when the resolved engine is live but REMIX_TTS_MODE is not actually live", () => {
+  it("estimates live OpenRouter cost when remake engine is live even if env default is fake", () => {
     process.env.REMIX_TTS_MODE = "fake";
+    process.env.REMIX_TTS_COST_PER_1K_CHARS_USD = "0.06";
     const estimate = buildRemixCostEstimate({
       remakeId: "r1",
       videoDurationSec: 60,
@@ -166,7 +167,7 @@ describe("buildRemixCostEstimate", () => {
       ttsEngine: "live",
     });
     const tts = estimate.actions.find((a) => a.action === "tts");
-    expect(tts?.estimatedUsd).toBe(0);
+    expect(tts?.estimatedUsd).toBeGreaterThan(0);
     expect(estimate.resolvedEngine).toBe("live");
     expect(estimate.defaultTtsEngine).toBe("piper");
   });
