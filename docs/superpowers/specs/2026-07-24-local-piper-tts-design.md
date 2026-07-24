@@ -27,7 +27,7 @@ We need a **local Piper path** without removing the live Grok option.
 - Dual TTS engines selectable per remake job:
   - `live` — existing OpenRouter/Grok HTTP TTS  
   - `piper` — local Piper CLI + Ngọc Huyền (mới) ONNX  
-- **Env default + UI override**: UI default follows server `REMIX_TTS_MODE`; editor can switch per TTS run.  
+- **Env default + UI override**: control shows persisted `ttsEngine` when set, else server `REMIX_TTS_MODE`; editor can switch per TTS run.  
 - Vietnamese **text normalization** before Piper (numbers, dates, Latin loanwords → readable VI).  
 - **Smart batching** for Piper only: merge by sentence/silence; avoid mid-word ratio cuts.  
 - Piper TTS **costUsd = 0**; cost-estimate UI reflects that.  
@@ -59,7 +59,7 @@ We need a **local Piper path** without removing the live Grok option.
 | Text prep (live) | No-op (unchanged) |
 | Batch (piper) | **Smart batch** (sentence/silence; no mid-word ratio split) |
 | Batch (live) | Existing **ratio batch** (cost control) |
-| UI default | Follow resolved server default from `REMIX_TTS_MODE` |
+| UI default | Control shows `remake.ttsEngine` if set, else `REMIX_TTS_MODE`; `fake` not in UI |
 | Architecture style | **Engine strategy** (Approach 2): pluggable engine + prep + batch strategy inside one `handleTts` |
 
 ---
@@ -137,9 +137,10 @@ Env (names illustrative; finalize in plan):
 ### 5.4 UI (Remake Studio)
 
 - Control: **Engine — Local (Ngọc Huyền) | Live (Grok)**  
-- Default selection = server/env-resolved default  
+  - **Bootstrap:** show persisted `remake.ttsEngine` when set; otherwise show env-resolved server default (`REMIX_TTS_MODE`). Never reset a saved remake back to env on reopen (avoids accidental Live/Grok credit burn).  
+  - `fake` is **CI/env-only** — not offered in the UI; under the same resolve order it keeps today’s non-Piper fake adapter path.  
 - Short hint: local free / live uses OpenRouter credit  
-- “Tạo audio VI” sends selected `engine`
+- “Tạo audio VI” always **persists** the selected engine on the remake and enqueues TTS with that engine in the payload
 
 ---
 
