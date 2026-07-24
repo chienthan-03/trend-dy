@@ -67,7 +67,7 @@ describe("PiperTtsAdapter", () => {
   let dir: string;
   let stubPath: string;
   let modelDir: string;
-  const stem = "Ngọc Huyền (mới)";
+  const stem = "ngoc-huyen";
 
   beforeEach(async () => {
     process.env = { ...env };

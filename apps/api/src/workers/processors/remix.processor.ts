@@ -24,6 +24,7 @@ import {
   getMediaTtlDays,
   getPiperModelStem,
   getRemixScriptMode,
+  getTtsAudioMode,
   getTtsMaxSpeed,
   getTtsModel,
   resolveTtsEngine,
@@ -41,13 +42,14 @@ import {
   splitSmartBatchAudioToCues,
 } from "../../modules/remix/tts/smart-batch-cues";
 import {
-  applyPad,
-  applyTempo,
+  applyFitToTarget,
   planSegmentFit,
-  type SegmentFitPlan,
 } from "../../modules/remix/tts/segment-fit";
 import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
-import { mergeAllCueIntervals } from "../../modules/remix/tts/segment-role";
+import {
+  effectiveRole,
+  mergeNarrationIntervals,
+} from "../../modules/remix/tts/segment-role";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 import {
   readTtsBatchCache,
@@ -763,12 +765,23 @@ export class RemixProcessor extends WorkerHost {
     >();
     let ttsCostUsd = 0;
 
-    const cues: CueForBatch[] = translated.segments.map((segment, index) => ({
-      index,
-      text: segment.text,
-      startSec: segment.startSec,
-      endSec: segment.endSec,
-    }));
+    const audioMode = getTtsAudioMode();
+    const cues: CueForBatch[] = translated.segments
+      .map((segment, index) => ({ segment, index }))
+      .filter(({ segment }) => {
+        if (!segment.text.trim()) return false;
+        // `mix` keeps film-dialogue windows silent on the dub; `replace` speaks every cue.
+        if (audioMode === "mix") {
+          return effectiveRole(segment) === "narration";
+        }
+        return true;
+      })
+      .map(({ segment, index }) => ({
+        index,
+        text: segment.text,
+        startSec: segment.startSec,
+        endSec: segment.endSec,
+      }));
 
     // Piper never mid-word ratio-splits: always smart-batch by sentence/gap.
     // Live/fake keep the existing ratio batch (+ optional per_cue legacy mode).
@@ -874,13 +887,17 @@ export class RemixProcessor extends WorkerHost {
           }
         }
 
-        const fittedBuffer = await this.applyFitPlan(synth.buffer, plan);
+        const fitted = await applyFitToTarget(
+          synth.buffer,
+          plan,
+          targetDurationSec,
+        );
         timelineByIndex.set(segment.index, {
           startSec: segment.startSec,
           endSec: segment.endSec,
-          fittedMp3Buffer: fittedBuffer,
+          fittedMp3Buffer: fitted.buffer,
         });
-        if (parentFitFailed) {
+        if (parentFitFailed || fitted.truncated) {
           fitFailedIndexes.push(segment.index);
         }
         continue;
@@ -908,14 +925,18 @@ export class RemixProcessor extends WorkerHost {
           targetDurationSec,
           maxSpeed,
         });
-        if (plan.action === "shorten") {
+        const fitted = await applyFitToTarget(
+          slice.buffer,
+          plan,
+          targetDurationSec,
+        );
+        if (fitted.truncated) {
           fitFailedIndexes.push(slice.index);
         }
-        const fittedBuffer = await this.applyFitPlan(slice.buffer, plan);
         timelineByIndex.set(slice.index, {
           startSec: slice.startSec,
           endSec: slice.endSec,
-          fittedMp3Buffer: fittedBuffer,
+          fittedMp3Buffer: fitted.buffer,
         });
       }
     }
@@ -1000,12 +1021,11 @@ export class RemixProcessor extends WorkerHost {
     ]);
 
     let renderedBuffer: Buffer;
-    if (remake.dubSource === "tts") {
-      // MVP: duck every translated cue window (ignore roles) so VI TTS never
-      // double-plays over unducked original film audio on the same interval.
+    if (remake.dubSource === "tts" && getTtsAudioMode() === "mix") {
+      // Narration-only dub: duck original under Review windows; keep film on source.
       const translated =
         remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
-      const duckIntervals = mergeAllCueIntervals(translated?.segments ?? []);
+      const duckIntervals = mergeNarrationIntervals(translated?.segments ?? []);
 
       renderedBuffer =
         remake.renderMode === "banner_audio"
@@ -1021,7 +1041,7 @@ export class RemixProcessor extends WorkerHost {
               duckIntervals,
             );
     } else {
-      // Upload dub, or legacy rows with null dubSource — full replace.
+      // TTS replace (default), upload dub, or legacy null dubSource — full replace.
       renderedBuffer =
         remake.renderMode === "banner_audio"
           ? await this.remixRender.renderBannerAudio(
@@ -1047,19 +1067,6 @@ export class RemixProcessor extends WorkerHost {
     });
 
     this.logger.log(`remix_render ${jobId}: render ready for ${remakeId}`);
-  }
-
-  private async applyFitPlan(
-    buffer: Buffer,
-    plan: SegmentFitPlan,
-  ): Promise<Buffer> {
-    if (plan.action === "pad" && plan.padSec) {
-      return applyPad(buffer, plan.padSec);
-    }
-    if (plan.action === "speed" || plan.action === "shorten") {
-      return applyTempo(buffer, plan.speed);
-    }
-    return buffer;
   }
 
   private async handleCleanupMedia(jobId: string): Promise<void> {

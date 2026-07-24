@@ -130,3 +130,75 @@ export const applyTempo = async (buffer: Buffer, speed: number): Promise<Buffer>
     await rm(dir, { recursive: true, force: true });
   }
 };
+
+/**
+ * Hard-cut audio to `durationSec` so a clip that still overruns after max
+ * atempo cannot spill into the next cue window (adelay + amix would sum voices).
+ */
+export const applyTruncate = async (
+  buffer: Buffer,
+  durationSec: number,
+): Promise<Buffer> => {
+  if (isFakeTtsMode()) {
+    return buffer;
+  }
+
+  const target = Math.max(durationSec, 0.05);
+  const ffmpeg = getFfmpegPath();
+  const dir = await mkdtemp(join(tmpdir(), "remix-tts-trim-"));
+  const inputPath = join(dir, "input.audio");
+  const outputPath = join(dir, "output.mp3");
+
+  try {
+    await writeFile(inputPath, buffer);
+    await runFfmpeg(ffmpeg, [
+      "-y",
+      "-i",
+      inputPath,
+      "-t",
+      target.toFixed(3),
+      "-codec:a",
+      "libmp3lame",
+      "-f",
+      "mp3",
+      outputPath,
+    ]);
+    return await readFile(outputPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+export type FitToTargetResult = {
+  buffer: Buffer;
+  /** True when the plan required max-speed + hard truncate (fit failure). */
+  truncated: boolean;
+};
+
+/**
+ * Apply pad/tempo/shorten for a cue window. On `shorten`, tempo to maxSpeed
+ * then hard-truncate to `targetDurationSec` so the clip cannot overrun.
+ */
+export const applyFitToTarget = async (
+  buffer: Buffer,
+  plan: SegmentFitPlan,
+  targetDurationSec: number,
+): Promise<FitToTargetResult> => {
+  if (plan.action === "pad" && plan.padSec) {
+    return { buffer: await applyPad(buffer, plan.padSec), truncated: false };
+  }
+
+  if (plan.action === "speed") {
+    return { buffer: await applyTempo(buffer, plan.speed), truncated: false };
+  }
+
+  if (plan.action === "shorten") {
+    const sped = await applyTempo(buffer, plan.speed);
+    return {
+      buffer: await applyTruncate(sped, targetDurationSec),
+      truncated: true,
+    };
+  }
+
+  return { buffer, truncated: false };
+};

@@ -28,7 +28,7 @@ export const mergeNarrationIntervals = (
       .map((s) => ({ startSec: s.startSec, endSec: s.endSec })),
   );
 
-/** MVP duck: every cue window that has TTS audio, ignoring role labels. */
+/** Merge every cue window (legacy MVP duck — prefer `mergeNarrationIntervals`). */
 export const mergeAllCueIntervals = (
   segments: Array<{ startSec: number; endSec: number }>,
 ): Array<{ startSec: number; endSec: number }> =>

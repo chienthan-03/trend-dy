@@ -54,6 +54,19 @@ export const getTtsMaxSpeed = (): number => {
   return Number.isFinite(n) && n > 0 ? n : 1.25;
 };
 
+/**
+ * How TTS dub is mixed into the final render:
+ * - `replace` (default): TTS every cue; full soundtrack replace (continuous VI).
+ * - `mix`: TTS narration only; duck original under narration (Review / Giữ gốc).
+ */
+export type TtsAudioMode = "replace" | "mix";
+
+export const getTtsAudioMode = (): TtsAudioMode => {
+  const raw = process.env.REMIX_TTS_AUDIO_MODE?.trim().toLowerCase();
+  if (raw === "mix") return "mix";
+  return "replace";
+};
+
 export type TtsEngine = "fake" | "live" | "piper";
 
 /** @deprecated Prefer `TtsEngine`; kept for existing imports. */
@@ -108,8 +121,9 @@ export const getPiperModelDir = (): string => {
   return resolveDefaultPiperModelDir();
 };
 
+/** ASCII stem for Windows-safe paths (Piper CLI crashes on Unicode model paths). */
 export const getPiperModelStem = (): string =>
-  process.env.REMIX_PIPER_MODEL_STEM?.trim() || "Ngọc Huyền (mới)";
+  process.env.REMIX_PIPER_MODEL_STEM?.trim() || "ngoc-huyen";
 
 export const getSmartBatchMaxGapSec = (): number => {
   const n = Number(process.env.REMIX_TTS_SMART_BATCH_MAX_GAP_SEC ?? "0.6");

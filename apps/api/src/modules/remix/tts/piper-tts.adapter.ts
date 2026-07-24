@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { probeAudioDurationSec, runFfmpeg } from "../remix-audio.util";
 import {
   getPiperBin,
@@ -45,7 +45,8 @@ export const assertPiperAssets = (assets: PiperAssets): void => {
   if (!existsSync(assets.onnxPath) || !existsSync(assets.configPath)) {
     throw new Error(
       `Piper voice assets missing (expected "${assets.onnxPath}" and "${assets.configPath}"). ` +
-        "Copy the Ngọc Huyền .onnx + .onnx.json pair into apps/api/models/tts/ngoc-huyen, " +
+        "Copy ngoc-huyen.onnx + ngoc-huyen.onnx.json into apps/api/models/tts/ngoc-huyen " +
+        "(ASCII filenames — Piper on Windows crashes on Unicode paths), " +
         "or set REMIX_PIPER_MODEL_DIR / REMIX_PIPER_MODEL_STEM.",
     );
   }
@@ -70,7 +71,7 @@ const resolveSpawnCommand = (bin: string): { command: string; prefixArgs: string
 const runPiperCli = (assets: PiperAssets, text: string, outputWavPath: string): Promise<void> =>
   new Promise((resolvePromise, reject) => {
     const { command, prefixArgs } = resolveSpawnCommand(assets.bin);
-    // argv array only — never shell-join (paths carry spaces/Unicode, e.g. "Ngọc Huyền (mới).onnx").
+    // argv array only — never shell-join (spaces in paths). Prefer ASCII model filenames on Windows.
     const args = [
       ...prefixArgs,
       "--model",
@@ -81,14 +82,32 @@ const runPiperCli = (assets: PiperAssets, text: string, outputWavPath: string): 
       outputWavPath,
     ];
 
-    const proc = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    // cwd = piper.exe dir so sibling DLLs (onnxruntime, espeak-ng) resolve on Windows.
+    const spawnOpts: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = {
+      stdio: ["pipe", "pipe", "pipe"],
+    };
+    if (hasPathSeparator(assets.bin)) {
+      spawnOpts.cwd = dirname(resolve(assets.bin));
+    }
+
+    const proc = spawn(command, args, spawnOpts);
     let stderr = "";
 
     proc.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
-    proc.on("error", reject);
+    proc.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") {
+        reject(
+          new Error(
+            `Piper binary not found ("${command}"). Install Piper CLI and set REMIX_PIPER_BIN to the full path of piper.exe (Windows) or piper.`,
+          ),
+        );
+        return;
+      }
+      reject(err);
+    });
     proc.on("close", (code) => {
       if (code === 0) {
         resolvePromise();

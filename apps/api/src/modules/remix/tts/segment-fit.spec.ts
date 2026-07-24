@@ -46,4 +46,40 @@ describe("applyPad / applyTempo", () => {
     const result = await applyTempo(input, 1.25);
     expect(result).toBe(input);
   });
+
+  it("returns passthrough buffer in fake mode for applyTruncate", async () => {
+    const { applyTruncate } = await import("./segment-fit");
+    const result = await applyTruncate(input, 1.5);
+    expect(result).toBe(input);
+  });
+});
+
+describe("applyFitToTarget", () => {
+  const env = process.env;
+  const input = Buffer.from("fake-audio-longer-than-window");
+
+  beforeEach(() => {
+    process.env = { ...env };
+    process.env.REMIX_TTS_MODE = "fake";
+  });
+
+  afterEach(() => {
+    process.env = env;
+  });
+
+  it("marks shorten plans as needing truncate so overrun cannot spill into the next cue", async () => {
+    const { applyFitToTarget, planSegmentFit } = await import("./segment-fit");
+    const plan = planSegmentFit({
+      audioDurationSec: 10,
+      targetDurationSec: 4,
+      maxSpeed: 1.25,
+    });
+    expect(plan.action).toBe("shorten");
+
+    const result = await applyFitToTarget(input, plan, 4);
+    // Fake mode: tempo is passthrough, but shorten must still return a
+    // truncated buffer identity path that live mode would hard-cut to target.
+    expect(result.truncated).toBe(true);
+    expect(result.buffer).toBeDefined();
+  });
 });

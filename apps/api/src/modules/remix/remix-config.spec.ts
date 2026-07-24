@@ -16,6 +16,7 @@ import {
   getSttModel,
   getSttResponseFormat,
   getTtsMaxSpeed,
+  getTtsAudioMode,
   getTtsMode,
   resolveTtsEngine,
 } from "./remix-config";
@@ -133,6 +134,21 @@ describe("remix-config", () => {
     expect(getDuckGain()).toBe(0);
   });
 
+  it("defaults TTS audio mode to replace (continuous VI)", () => {
+    delete process.env.REMIX_TTS_AUDIO_MODE;
+    expect(getTtsAudioMode()).toBe("replace");
+  });
+
+  it("reads mix TTS audio mode from env", () => {
+    process.env.REMIX_TTS_AUDIO_MODE = "mix";
+    expect(getTtsAudioMode()).toBe("mix");
+  });
+
+  it("treats unknown TTS audio mode values as replace", () => {
+    process.env.REMIX_TTS_AUDIO_MODE = "weird";
+    expect(getTtsAudioMode()).toBe("replace");
+  });
+
   it("reads duck gain from env", () => {
     process.env.REMIX_DUCK_GAIN = "0.3";
     expect(getDuckGain()).toBe(0.3);
@@ -206,9 +222,9 @@ describe("remix-config", () => {
     expect(getPiperBin()).toBe("/usr/local/bin/piper");
   });
 
-  it("defaults Piper model stem to Ngọc Huyền (mới)", () => {
+  it("defaults Piper model stem to ASCII ngoc-huyen", () => {
     delete process.env.REMIX_PIPER_MODEL_STEM;
-    expect(getPiperModelStem()).toBe("Ngọc Huyền (mới)");
+    expect(getPiperModelStem()).toBe("ngoc-huyen");
   });
 
   it("honors REMIX_PIPER_MODEL_DIR override", () => {

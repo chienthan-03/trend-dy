@@ -108,4 +108,28 @@ describe("splitSmartBatchAudioToCues", () => {
     expect(slices[2]!.startSec).toBe(6);
     expect(slices[2]!.endSec).toBe(8);
   });
+
+  it("allocates slice durations by text length, not cue window (regression: mất chữ)", async () => {
+    const cues = [
+      cue(0, 0, 5, "Sau khi bày tỏ cảm ơn"),
+      cue(1, 5, 6, "anh ấy bình tĩnh đi về phía chiếc bàn đó"),
+    ];
+    const batchMp3 = Buffer.alloc(1000, 0x01);
+    const batchAudioDurationSec = 6;
+
+    const slices = await splitSmartBatchAudioToCues({
+      cues,
+      batchMp3,
+      batchAudioDurationSec,
+    });
+
+    const len0 = cues[0]!.text.length;
+    const len1 = cues[1]!.text.length;
+    expect(slices[1]!.sliceDurationSec).toBeCloseTo(
+      (batchAudioDurationSec * len1) / (len0 + len1),
+      5,
+    );
+    // Must not collapse to the 1s STT window share (window-weight bug).
+    expect(slices[1]!.sliceDurationSec).toBeGreaterThan(2);
+  });
 });

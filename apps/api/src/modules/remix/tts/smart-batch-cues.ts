@@ -33,8 +33,9 @@ const toBatch = (cues: CueForBatch[]): TtsCueBatch => ({
  * caps, preferring to flush after sentence-ending punctuation when the next cue
  * would exceed caps.
  *
- * Split (MVP): cue-boundary slices only — reuses window-weight allocation from
- * `split-batch-audio` (no ffmpeg silencedetect snap; follow-up).
+ * Split: cue-boundary slices weighted by **spoken text length** (not STT window
+ * duration). Window-weight cuts mid-phrase when text/window ratios diverge.
+ * ffmpeg silencedetect snap remains a follow-up.
  */
 export const smartBatchCuesForTts = (
   cues: CueForBatch[],
@@ -124,9 +125,10 @@ export const smartBatchCuesForTts = (
   return batches;
 };
 
-/** Cue-boundary-only MVP split — delegates to window-weight batch slicing. */
+/** Cue-boundary split weighted by spoken text (matches Piper pacing). */
 export const splitSmartBatchAudioToCues = async (input: {
   cues: CueForBatch[];
   batchMp3: Buffer;
   batchAudioDurationSec: number;
-}): Promise<CueAudioSlice[]> => splitBatchAudioToCues(input);
+}): Promise<CueAudioSlice[]> =>
+  splitBatchAudioToCues({ ...input, weightMode: "text" });

@@ -64,7 +64,7 @@ describe("createTtsAdapter", () => {
     });
 
     it("returns a PiperTtsAdapter instance when assets resolve", async () => {
-      const stem = "Ngọc Huyền (mới)";
+      const stem = "ngoc-huyen";
       const modelDir = join(dir, "models");
       await mkdir(modelDir, { recursive: true });
       await writeFile(join(modelDir, `${stem}.onnx`), "fake-onnx-weights");

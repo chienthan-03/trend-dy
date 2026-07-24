@@ -22,17 +22,13 @@ const isFakeTtsMode = (): boolean =>
 const cueWindowSec = (cue: CueForBatch): number =>
   Math.max(cue.endSec - cue.startSec, 0.1);
 
-/**
- * Allocate contiguous time ranges inside a batch TTS clip using each cue's
- * timeline window as weight (matches Phân đoạn durations better than raw chars).
- */
-export const allocateBatchSliceRanges = (
+const allocateByWeights = (
   cues: CueForBatch[],
+  weights: number[],
   batchAudioDurationSec: number,
 ): Array<{ index: number; offsetSec: number; durationSec: number }> => {
   if (cues.length === 0) return [];
 
-  const weights = cues.map((cue) => cueWindowSec(cue));
   const weightSum = weights.reduce((sum, w) => sum + w, 0);
   const total = Math.max(batchAudioDurationSec, 0.1);
 
@@ -48,6 +44,35 @@ export const allocateBatchSliceRanges = (
     return { index: cue.index, offsetSec, durationSec };
   });
 };
+
+/**
+ * Allocate contiguous time ranges inside a batch TTS clip using each cue's
+ * timeline window as weight (live/Grok path — matches Phân đoạn durations).
+ */
+export const allocateBatchSliceRanges = (
+  cues: CueForBatch[],
+  batchAudioDurationSec: number,
+): Array<{ index: number; offsetSec: number; durationSec: number }> =>
+  allocateByWeights(
+    cues,
+    cues.map((cue) => cueWindowSec(cue)),
+    batchAudioDurationSec,
+  );
+
+/**
+ * Allocate by spoken-text length. Piper (and most TTS) paces by content, not by
+ * the STT cue window — weighting by window cuts mid-phrase when a long line sits
+ * in a short window next to a short line in a long window ("mất chữ").
+ */
+export const allocateBatchSliceRangesByText = (
+  cues: CueForBatch[],
+  batchAudioDurationSec: number,
+): Array<{ index: number; offsetSec: number; durationSec: number }> =>
+  allocateByWeights(
+    cues,
+    cues.map((cue) => Math.max(cue.text.trim().length, 1)),
+    batchAudioDurationSec,
+  );
 
 const sliceFakeByRatio = (
   mp3Buffer: Buffer,
@@ -113,9 +138,14 @@ export const splitBatchAudioToCues = async (input: {
   cues: CueForBatch[];
   batchMp3: Buffer;
   batchAudioDurationSec: number;
+  /** `text` = spoken-content weights (Piper); `window` = STT cue durations (live). */
+  weightMode?: "window" | "text";
 }): Promise<CueAudioSlice[]> => {
-  const { cues, batchMp3, batchAudioDurationSec } = input;
-  const ranges = allocateBatchSliceRanges(cues, batchAudioDurationSec);
+  const { cues, batchMp3, batchAudioDurationSec, weightMode = "window" } = input;
+  const ranges =
+    weightMode === "text"
+      ? allocateBatchSliceRangesByText(cues, batchAudioDurationSec)
+      : allocateBatchSliceRanges(cues, batchAudioDurationSec);
 
   const slices: CueAudioSlice[] = [];
   for (let i = 0; i < cues.length; i += 1) {
