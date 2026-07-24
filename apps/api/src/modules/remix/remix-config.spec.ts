@@ -17,6 +17,7 @@ import {
   getSttResponseFormat,
   getTtsMaxSpeed,
   getTtsAudioMode,
+  getTtsTimingMode,
   getTtsMode,
   resolveTtsEngine,
 } from "./remix-config";
@@ -147,6 +148,21 @@ describe("remix-config", () => {
   it("treats unknown TTS audio mode values as replace", () => {
     process.env.REMIX_TTS_AUDIO_MODE = "weird";
     expect(getTtsAudioMode()).toBe("replace");
+  });
+
+  it("defaults TTS timing mode to hybrid", () => {
+    delete process.env.REMIX_TTS_TIMING_MODE;
+    expect(getTtsTimingMode()).toBe("hybrid");
+  });
+
+  it("honors REMIX_TTS_TIMING_MODE=strict", () => {
+    process.env.REMIX_TTS_TIMING_MODE = "strict";
+    expect(getTtsTimingMode()).toBe("strict");
+  });
+
+  it("falls back to hybrid for unknown timing mode", () => {
+    process.env.REMIX_TTS_TIMING_MODE = "elastic";
+    expect(getTtsTimingMode()).toBe("hybrid");
   });
 
   it("reads duck gain from env", () => {

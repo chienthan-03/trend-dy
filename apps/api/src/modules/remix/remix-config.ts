@@ -67,6 +67,26 @@ export const getTtsAudioMode = (): TtsAudioMode => {
   return "replace";
 };
 
+export type TtsTimingMode = "hybrid" | "strict";
+
+export const getTtsTimingMode = (): TtsTimingMode => {
+  const raw = process.env.REMIX_TTS_TIMING_MODE?.trim().toLowerCase();
+  if (raw === "strict") return "strict";
+  return "hybrid";
+};
+
+export const getHybridBlockGapSec = (): number => {
+  const n = Number(process.env.REMIX_TTS_HYBRID_BLOCK_GAP_SEC ?? "1");
+  if (!Number.isFinite(n) || n < 0) return 1;
+  return n;
+};
+
+export const getHybridLockGraceSec = (): number => {
+  const n = Number(process.env.REMIX_TTS_HYBRID_LOCK_GRACE_SEC ?? "0.5");
+  if (!Number.isFinite(n) || n < 0) return 0.5;
+  return n;
+};
+
 export type TtsEngine = "fake" | "live" | "piper";
 
 /** @deprecated Prefer `TtsEngine`; kept for existing imports. */
