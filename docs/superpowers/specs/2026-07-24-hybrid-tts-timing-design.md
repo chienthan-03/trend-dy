@@ -30,7 +30,7 @@ Editors want **continuous Vietnamese narration** that finishes sentences, while 
 - **Hybrid timing:** within a narration block, play each cue to completion and **defer** the next cue’s `startSec` when needed; allow short cues to end early (silence until the next ZH `startSec` — no early pull).
 - **Lock points:** hard-sync **`source`** cues to ZH windows; reset narration at the **start of a new narration block** after a gap ≥ **1.0s**.
 - When a deferred narration chain would collide with a lock: allow **500ms grace** past the lock start, then **max-speed then truncate** (same fit tools as today).
-- Config: `REMIX_TTS_TIMING_MODE=hybrid|strict` (default **`hybrid`**), applied only when `REMIX_TTS_AUDIO_MODE=replace`. `mix` or `strict` keep per-cue ZH locking.
+- Config: `REMIX_TTS_TIMING_MODE=hybrid|strict` (default **`hybrid`**), applied only when `REMIX_TTS_AUDIO_MODE=replace`. **Audio mode `mix`** or **timing mode `strict`** keep per-cue ZH locking.
 - Pure planner module (no I/O) + unit tests; wire into `handleTts` after real clip durations are known.
 
 ### Non-goals (MVP)
@@ -116,13 +116,15 @@ type HybridTimelineOptions = {
   blockGapSec: number;   // default 1.0
   lockGraceSec: number;  // default 0.5
   maxSpeed: number;      // from getMaxTtsSpeed()
+  /** Optional hard stop for the final block; MVP default = omit (+Infinity). */
+  videoEndSec?: number;
 };
 ```
 
 ### 5.2 Steps
 
 1. Sort cues by ZH `startSec` (stable by `index`).
-2. **Mark locks:**
+2. **Mark locks** (use `effectiveRole()` from `segment-role.ts` — same default as `handleTts`):
    - any cue with effective role `source`;
    - any narration cue whose gap from previous cue’s ZH `endSec` is ≥ `blockGapSec`;
    - the first cue on the timeline.
@@ -134,11 +136,14 @@ type HybridTimelineOptions = {
    - **Unlocked narration:**
      - `startSec = max(ZH startSec, prevPlacedEnd)`
      - `naturalEnd = startSec + audioDurationSec`
-     - `nextLockStart` = ZH `startSec` of the next lock cue after this one (if any), else `+Infinity` / video end if provided
-     - `maxEndSec = nextLockStart + lockGraceSec`
+     - `nextLockStart` = ZH `startSec` of the next lock cue after this one (if any); else `videoEndSec` if provided; else `+Infinity`
+     - `maxEndSec = nextLockStart + lockGraceSec` (when `nextLockStart` is finite; if `+Infinity`, no lock budget)
      - if `naturalEnd <= maxEndSec`: `fitTargetSec = audioDurationSec` (no pad); intended end = `naturalEnd`
      - else: `fitTargetSec = max(maxEndSec - startSec, ε)` (may require speed/shorten)
-4. After determining fitted duration intent, set `prevPlacedEnd = startSec + min(audioDurationSec, fitTargetSec)` (planner may return both raw and target; processor applies real fit and can recompute end from buffer duration if needed — MVP: trust `fitTargetSec` + planSegmentFit).
+4. After determining fitted duration intent, set `prevPlacedEnd`:
+   - **locked:** `startSec + fitTargetSec` (ZH window may **pad** short audio — chain must not start inside that pad)
+   - **unlocked:** `startSec + min(audioDurationSec, fitTargetSec)`
+   Processor applies real fit via `planSegmentFit` + `applyFitToTarget`; MVP trusts these intents.
 5. **No early pull:** never set narration `startSec < ZH startSec`.
 
 ### 5.3 Fit application
