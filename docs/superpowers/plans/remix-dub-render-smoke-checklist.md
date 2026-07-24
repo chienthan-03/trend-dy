@@ -27,6 +27,20 @@ FFMPEG_PATH=ffmpeg
 
 For live TTS/render, set `REMIX_TTS_MODE=live`, `REMIX_RENDER_MODE` unset (or not `fake`), and provide `REMIX_TTS_API_URL` / `REMIX_TTS_API_KEY` (or `AI_GATEWAY_*`).
 
+For local Piper TTS, set `REMIX_TTS_MODE=piper`, copy `Ngọc Huyền (mới).onnx` + `.onnx.json` into `apps/api/models/tts/ngoc-huyen/`, install Piper CLI (`REMIX_PIPER_BIN`), and restart API + worker.
+
+---
+
+## Piper local TTS (manual)
+
+| # | Step | Expected | Result |
+|---|------|----------|--------|
+| P1 | Set `REMIX_TTS_MODE=piper`, copy model pair into `apps/api/models/tts/ngoc-huyen/`, restart API + worker | Worker loads Piper adapter without HTTP TTS errors | |
+| P2 | Open remake with `ttsEngine=null` | Video output panel shows **Local** as default TTS engine | |
+| P3 | Run **Tạo audio VI** | `ttsCostUsd ≈ 0`, voice Ngọc Huyền, `renderPhase=tts_ready` | |
+| P4 | Switch UI to **Live**, run TTS again | Grok/HTTP path runs; non-zero cost estimate if API key configured | |
+| P5 | Reopen the same remake | UI still shows last persisted engine (not reset by env default) | |
+
 ---
 
 ## Smoke test steps
@@ -62,4 +76,4 @@ Run in order after logging into Remake Studio.
 cd apps/api && pnpm test -- remix
 ```
 
-All remix-scoped unit/integration specs should pass. Known pre-existing e2e failures (if any) are noted in the plan verification commit message.
+All remix-scoped unit/integration specs should pass. Known pre-existing failures in `remix.processor.full-script.spec.ts` (7 tests): assertions expect direct `synthesize`/`shortenSegmentText` calls but TTS batch cache returns hits — unrelated to Piper; track separately.
