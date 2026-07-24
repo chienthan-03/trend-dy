@@ -19,12 +19,16 @@ export const getTtsCacheDir = (): string =>
   join(tmpdir(), "remix-tts-batch-cache");
 
 export const ttsBatchCacheKey = (input: {
+  engine: string;
   model: string;
   voiceId: string;
   text: string;
 }): string =>
   createHash("sha256")
-    .update([input.model, input.voiceId, input.text].join("\0"), "utf8")
+    .update(
+      [input.engine, input.model, input.voiceId, input.text].join("\0"),
+      "utf8",
+    )
     .digest("hex");
 
 const pathsForKey = (key: string) => {
@@ -38,7 +42,7 @@ const pathsForKey = (key: string) => {
 
 /**
  * Disk cache for batch TTS clips. Survive assemble failures / worker restarts
- * so the same (model, voice, text) does not re-bill OpenRouter.
+ * so the same (engine, model, voice, text) does not re-bill OpenRouter.
  */
 export const readTtsBatchCache = async (
   key: string,

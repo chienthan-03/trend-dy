@@ -24,6 +24,7 @@ import {
   getMediaTtlDays,
   getRemixScriptMode,
   getTtsMaxSpeed,
+  getTtsMode,
   getTtsModel,
 } from "../../modules/remix/remix-config";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "../../modules/remix/translate-config";
@@ -767,6 +768,7 @@ export class RemixProcessor extends WorkerHost {
       if (!batch.text) continue;
 
       const cacheKey = ttsBatchCacheKey({
+        engine: getTtsMode(),
         model: ttsModel,
         voiceId,
         text: batch.text,

@@ -24,18 +24,21 @@ describe("tts-batch-cache", () => {
     await rm(cacheDir, { recursive: true, force: true });
   });
 
-  it("keys by model + voice + text", () => {
+  it("keys by engine + model + voice + text", () => {
     const a = ttsBatchCacheKey({
+      engine: "live",
       model: "m1",
       voiceId: "eve",
       text: "xin chào",
     });
     const b = ttsBatchCacheKey({
+      engine: "live",
       model: "m1",
       voiceId: "eve",
       text: "xin chào",
     });
     const c = ttsBatchCacheKey({
+      engine: "live",
       model: "m1",
       voiceId: "eve",
       text: "xin chào!",
@@ -44,8 +47,25 @@ describe("tts-batch-cache", () => {
     expect(a).not.toBe(c);
   });
 
+  it("uses different keys for different engines", () => {
+    const live = ttsBatchCacheKey({
+      engine: "live",
+      model: "m1",
+      voiceId: "eve",
+      text: "xin chào",
+    });
+    const piper = ttsBatchCacheKey({
+      engine: "piper",
+      model: "m1",
+      voiceId: "eve",
+      text: "xin chào",
+    });
+    expect(live).not.toBe(piper);
+  });
+
   it("round-trips buffer + duration", async () => {
     const key = ttsBatchCacheKey({
+      engine: "live",
       model: "m",
       voiceId: "v",
       text: "hello",
@@ -61,7 +81,12 @@ describe("tts-batch-cache", () => {
 
   it("returns null when cache disabled", async () => {
     process.env.REMIX_TTS_CACHE = "off";
-    const key = ttsBatchCacheKey({ model: "m", voiceId: "v", text: "x" });
+    const key = ttsBatchCacheKey({
+      engine: "live",
+      model: "m",
+      voiceId: "v",
+      text: "x",
+    });
     await writeTtsBatchCache(key, {
       buffer: Buffer.from("x"),
       durationSec: 1,
