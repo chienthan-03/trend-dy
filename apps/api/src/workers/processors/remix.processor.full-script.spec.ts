@@ -191,6 +191,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
     delete process.env.REMIX_TTS_MAX_SPEED;
     delete process.env.REMIX_TTS_BATCH_MODE;
     delete process.env.REMIX_TTS_AUDIO_MODE;
+    delete process.env.REMIX_TTS_TIMING_MODE;
     mockGetVideoDetail.mockResolvedValue({
       videoId: "vid_1",
       title: "t",
@@ -486,6 +487,9 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
   it("handleTts fits each segment, retries a shorten once, and assembles the dub", async () => {
     process.env.REMIX_TTS_BATCH_MODE = "per_cue";
+    // ZH-pin + shorten/fit-fail behavior is the strict-timing contract; hybrid
+    // is the default now and retimes unlocked narration instead of shortening.
+    process.env.REMIX_TTS_TIMING_MODE = "strict";
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
       dubSource: null,
@@ -759,6 +763,9 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
   it("handleTts records ttsFitFailedIndexes using persisted segment indexes across a source segment", async () => {
     process.env.REMIX_TTS_BATCH_MODE = "per_cue";
+    // ZH-pin + shorten/fit-fail behavior is the strict-timing contract; hybrid
+    // is the default now and retimes unlocked narration instead of shortening.
+    process.env.REMIX_TTS_TIMING_MODE = "strict";
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
       dubSource: null,
@@ -798,6 +805,93 @@ describe("RemixProcessor (Full Script Mode)", () => {
         }),
       }),
     );
+  });
+
+  it("handleTts hybrid retimes long narration before a source lock", async () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    process.env.REMIX_TTS_AUDIO_MODE = "replace";
+    process.env.REMIX_TTS_TIMING_MODE = "hybrid";
+    process.env.REMIX_TTS_BATCH_MODE = "per_cue";
+
+    const assembleSpy = vi.spyOn(assembleDub, "assembleDubTimeline");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsEngine: null,
+      videoDurationSec: 12,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 12,
+        segments: [
+          { startSec: 0, endSec: 0.5, text: "A", role: "narration", roleSource: "manual" },
+          {
+            startSec: 0.5,
+            endSec: 2,
+            text: "B".repeat(200),
+            role: "narration",
+            roleSource: "manual",
+          },
+          { startSec: 5, endSec: 6, text: "C", role: "source", roleSource: "manual" },
+        ],
+        fullText: "…",
+      },
+    });
+
+    await processor.process({
+      id: "job_hybrid",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as never);
+
+    expect(assembleSpy).toHaveBeenCalled();
+    const segs = assembleSpy.mock.calls[0]![0].segments as Array<{
+      startSec: number;
+      endSec: number;
+    }>;
+    const narrB = segs[1]!;
+    expect(narrB.endSec).toBeGreaterThan(2);
+  });
+
+  it("handleTts strict keeps ZH startSec for narration", async () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    process.env.REMIX_TTS_AUDIO_MODE = "replace";
+    process.env.REMIX_TTS_TIMING_MODE = "strict";
+    process.env.REMIX_TTS_BATCH_MODE = "per_cue";
+
+    const assembleSpy = vi.spyOn(assembleDub, "assembleDubTimeline");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsEngine: null,
+      videoDurationSec: 10,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 10,
+        segments: [
+          { startSec: 0, endSec: 2, text: "A".repeat(80), role: "narration", roleSource: "manual" },
+          { startSec: 2, endSec: 4, text: "B", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "…",
+      },
+    });
+
+    await processor.process({
+      id: "job_strict",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as never);
+
+    const segs = assembleSpy.mock.calls[0]![0].segments as Array<{ startSec: number }>;
+    expect(segs[0]!.startSec).toBe(0);
+    expect(segs[1]!.startSec).toBe(2);
   });
 
   it("handleTts invokes lazy classify when any segment role is unset", async () => {

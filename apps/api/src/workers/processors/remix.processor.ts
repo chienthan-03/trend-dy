@@ -21,12 +21,15 @@ import { createRemixMediaAdapter } from "../../modules/remix/remix-media.adapter
 import { extractAudioForStt } from "../../modules/remix/remix-audio.util";
 import {
   getDefaultTtsVoiceId,
+  getHybridBlockGapSec,
+  getHybridLockGraceSec,
   getMediaTtlDays,
   getPiperModelStem,
   getRemixScriptMode,
   getTtsAudioMode,
   getTtsMaxSpeed,
   getTtsModel,
+  getTtsTimingMode,
   resolveTtsEngine,
 } from "../../modules/remix/remix-config";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "../../modules/remix/translate-config";
@@ -37,6 +40,7 @@ import {
   type CueForBatch,
 } from "../../modules/remix/tts/batch-cues-for-tts";
 import { splitBatchAudioToCues } from "../../modules/remix/tts/split-batch-audio";
+import { planHybridTimeline } from "../../modules/remix/tts/hybrid-timeline";
 import {
   smartBatchCuesForTts,
   splitSmartBatchAudioToCues,
@@ -766,6 +770,19 @@ export class RemixProcessor extends WorkerHost {
     let ttsCostUsd = 0;
 
     const audioMode = getTtsAudioMode();
+    // Hybrid only applies to full soundtrack replace — `mix` narration-only
+    // dub always pins to the ZH window it ducks under.
+    const useHybrid = getTtsTimingMode() === "hybrid" && audioMode === "replace";
+
+    type RawClip = {
+      buffer: Buffer;
+      audioDurationSec: number;
+      zhStartSec: number;
+      zhEndSec: number;
+      role: ReturnType<typeof effectiveRole>;
+    };
+    const rawByIndex = new Map<number, RawClip>();
+
     const cues: CueForBatch[] = translated.segments
       .map((segment, index) => ({ segment, index }))
       .filter(({ segment }) => {
@@ -782,6 +799,32 @@ export class RemixProcessor extends WorkerHost {
         startSec: segment.startSec,
         endSec: segment.endSec,
       }));
+
+    // Which cues will be lock-anchored to their ZH window (independent of
+    // audio duration) — decides whether the per_cue legacy path is allowed
+    // to LLM-shorten during collect (hybrid unlocked narration retimes
+    // instead, so shortening it during collect would be wasted work).
+    const hybridLockedIndexes = useHybrid
+      ? new Set(
+          planHybridTimeline(
+            cues.map((cue) => ({
+              index: cue.index,
+              startSec: cue.startSec,
+              endSec: cue.endSec,
+              role: effectiveRole(translated.segments[cue.index]!),
+              audioDurationSec: 0,
+            })),
+            {
+              blockGapSec: getHybridBlockGapSec(),
+              lockGraceSec: getHybridLockGraceSec(),
+              maxSpeed,
+              videoEndSec: remake.videoDurationSec ?? undefined,
+            },
+          )
+            .filter((out) => out.locked)
+            .map((out) => out.index),
+        )
+      : null;
 
     // Piper never mid-word ratio-splits: always smart-batch by sentence/gap.
     // Live/fake keep the existing ratio batch (+ optional per_cue legacy mode).
@@ -851,55 +894,49 @@ export class RemixProcessor extends WorkerHost {
       }
       ttsCostUsd += synth.costUsd;
 
-      // Single-cue legacy path: optional local/LLM shorten + re-TTS.
+      // Single-cue legacy path: optional local/LLM shorten + re-TTS, then
+      // collect (fit happens once every cue has been synthesized, once we
+      // know the full hybrid timeline).
       if (batchMode === "per_cue" && batch.cues.length === 1) {
         const segment = batch.cues[0]!;
         const targetDurationSec = Math.max(
           segment.endSec - segment.startSec,
           0.1,
         );
-        let plan = planSegmentFit({
-          audioDurationSec: synth.durationSec,
-          targetDurationSec,
-          maxSpeed,
-        });
-        let parentFitFailed = false;
+        // Strict always pins to the ZH window and may shorten to fit it;
+        // hybrid only shortens cues that stay lock-anchored to that window
+        // (unlocked narration retimes instead of losing words to a shorten).
+        const isLocked = !useHybrid || hybridLockedIndexes!.has(segment.index);
 
-        if (plan.action === "shorten") {
-          const shortened = await shortenSegmentText({
-            text: segment.text,
+        if (isLocked) {
+          const plan = planSegmentFit({
+            audioDurationSec: synth.durationSec,
             targetDurationSec,
+            maxSpeed,
           });
-          if (shortened.text && shortened.text !== segment.text) {
-            synth = await adapter.synthesize({
-              text: shortened.text,
-              voiceId,
-            });
-            ttsCostUsd += synth.costUsd;
-            plan = planSegmentFit({
-              audioDurationSec: synth.durationSec,
-              targetDurationSec,
-              maxSpeed,
-            });
-          }
+
           if (plan.action === "shorten") {
-            parentFitFailed = true;
+            const shortened = await shortenSegmentText({
+              text: segment.text,
+              targetDurationSec,
+            });
+            if (shortened.text && shortened.text !== segment.text) {
+              synth = await adapter.synthesize({
+                text: shortened.text,
+                voiceId,
+              });
+              ttsCostUsd += synth.costUsd;
+            }
           }
         }
 
-        const fitted = await applyFitToTarget(
-          synth.buffer,
-          plan,
-          targetDurationSec,
-        );
-        timelineByIndex.set(segment.index, {
-          startSec: segment.startSec,
-          endSec: segment.endSec,
-          fittedMp3Buffer: fitted.buffer,
+        rawByIndex.set(segment.index, {
+          buffer: synth.buffer,
+          audioDurationSec: synth.durationSec,
+          zhStartSec: segment.startSec,
+          zhEndSec: segment.endSec,
+          role: effectiveRole(translated.segments[segment.index]!),
         });
-        if (parentFitFailed || fitted.truncated) {
-          fitFailedIndexes.push(segment.index);
-        }
         continue;
       }
 
@@ -916,29 +953,59 @@ export class RemixProcessor extends WorkerHost {
           });
 
       for (const slice of slices) {
-        const targetDurationSec = Math.max(
-          slice.endSec - slice.startSec,
-          0.1,
-        );
-        const plan = planSegmentFit({
+        rawByIndex.set(slice.index, {
+          buffer: slice.buffer,
           audioDurationSec: slice.sliceDurationSec,
-          targetDurationSec,
-          maxSpeed,
-        });
-        const fitted = await applyFitToTarget(
-          slice.buffer,
-          plan,
-          targetDurationSec,
-        );
-        if (fitted.truncated) {
-          fitFailedIndexes.push(slice.index);
-        }
-        timelineByIndex.set(slice.index, {
-          startSec: slice.startSec,
-          endSec: slice.endSec,
-          fittedMp3Buffer: fitted.buffer,
+          zhStartSec: slice.startSec,
+          zhEndSec: slice.endSec,
+          role: effectiveRole(translated.segments[slice.index]!),
         });
       }
+    }
+
+    const hybridOuts = useHybrid
+      ? planHybridTimeline(
+          [...rawByIndex.entries()].map(([index, raw]) => ({
+            index,
+            startSec: raw.zhStartSec,
+            endSec: raw.zhEndSec,
+            role: raw.role,
+            audioDurationSec: raw.audioDurationSec,
+          })),
+          {
+            blockGapSec: getHybridBlockGapSec(),
+            lockGraceSec: getHybridLockGraceSec(),
+            maxSpeed,
+            videoEndSec: remake.videoDurationSec ?? undefined,
+          },
+        )
+      : null;
+
+    if (useHybrid) {
+      this.logger.log(
+        `remix_tts ${jobId}: hybrid timeline planned for ${rawByIndex.size} cues`,
+      );
+    }
+
+    for (const [index, raw] of rawByIndex) {
+      const planned = hybridOuts?.find((out) => out.index === index);
+      const startSec = planned?.startSec ?? raw.zhStartSec;
+      const fitTargetSec =
+        planned?.fitTargetSec ?? Math.max(raw.zhEndSec - raw.zhStartSec, 0.1);
+      const plan = planSegmentFit({
+        audioDurationSec: raw.audioDurationSec,
+        targetDurationSec: fitTargetSec,
+        maxSpeed,
+      });
+      const fitted = await applyFitToTarget(raw.buffer, plan, fitTargetSec);
+      if (fitted.truncated || plan.action === "shorten") {
+        fitFailedIndexes.push(index);
+      }
+      timelineByIndex.set(index, {
+        startSec,
+        endSec: startSec + fitTargetSec,
+        fittedMp3Buffer: fitted.buffer,
+      });
     }
 
     // Empty-text cues are omitted; assemble fills gaps with silence between clips.
