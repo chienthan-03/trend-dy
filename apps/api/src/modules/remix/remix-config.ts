@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { ServiceUnavailableException } from "@nestjs/common";
 import type { RemixScriptMode } from "@factory/shared";
 
@@ -53,11 +54,76 @@ export const getTtsMaxSpeed = (): number => {
   return Number.isFinite(n) && n > 0 ? n : 1.25;
 };
 
-export type TtsMode = "fake" | "live";
+export type TtsEngine = "fake" | "live" | "piper";
 
-export const getTtsMode = (): TtsMode => {
+/** @deprecated Prefer `TtsEngine`; kept for existing imports. */
+export type TtsMode = TtsEngine;
+
+/** Env-only default (UI may override via remake.ttsEngine). */
+export const getTtsMode = (): TtsEngine => {
   const raw = process.env.REMIX_TTS_MODE?.trim().toLowerCase();
-  return raw === "live" ? "live" : "fake";
+  if (raw === "live") return "live";
+  if (raw === "piper" || raw === "local") return "piper";
+  return "fake";
+};
+
+const normalizeEngine = (value?: string | null): TtsEngine | null => {
+  const raw = value?.trim().toLowerCase();
+  if (raw === "live" || raw === "piper" || raw === "fake") return raw;
+  if (raw === "local") return "piper";
+  return null;
+};
+
+export const resolveTtsEngine = (input?: {
+  payloadEngine?: string | null;
+  remakeEngine?: string | null;
+}): TtsEngine => {
+  const fromPayload = normalizeEngine(input?.payloadEngine);
+  if (fromPayload) return fromPayload;
+  const fromRemake = normalizeEngine(input?.remakeEngine);
+  if (fromRemake) return fromRemake;
+  return getTtsMode();
+};
+
+export const getPiperBin = (): string =>
+  process.env.REMIX_PIPER_BIN?.trim() || "piper";
+
+const resolveDefaultPiperModelDir = (): string => {
+  const cwd = process.cwd();
+  const candidates = [
+    join(cwd, "apps/api/models/tts/ngoc-huyen"),
+    join(cwd, "models/tts/ngoc-huyen"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return resolve(candidate);
+    }
+  }
+  return resolve(cwd, "apps/api/models/tts/ngoc-huyen");
+};
+
+export const getPiperModelDir = (): string => {
+  const configured = process.env.REMIX_PIPER_MODEL_DIR?.trim();
+  if (configured) return configured;
+  return resolveDefaultPiperModelDir();
+};
+
+export const getPiperModelStem = (): string =>
+  process.env.REMIX_PIPER_MODEL_STEM?.trim() || "Ngọc Huyền (mới)";
+
+export const getSmartBatchMaxGapSec = (): number => {
+  const n = Number(process.env.REMIX_TTS_SMART_BATCH_MAX_GAP_SEC ?? "0.6");
+  return Number.isFinite(n) && n > 0 ? n : 0.6;
+};
+
+export const getSmartBatchMaxDurationSec = (): number => {
+  const n = Number(process.env.REMIX_TTS_SMART_BATCH_MAX_DURATION_SEC ?? "12");
+  return Number.isFinite(n) && n > 0 ? n : 12;
+};
+
+export const getSmartBatchMaxChars = (): number => {
+  const n = Number(process.env.REMIX_TTS_SMART_BATCH_MAX_CHARS ?? "500");
+  return Number.isFinite(n) && n > 0 ? n : 500;
 };
 
 export const getTtsApiBaseUrl = (): string => {

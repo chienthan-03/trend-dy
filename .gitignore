@@ -23,3 +23,6 @@ vendor/redis-7/
 
 # Git worktrees
 .worktrees/
+
+# Piper TTS model weights (copy locally; see apps/api/models/tts/ngoc-huyen/README.md)
+apps/api/models/tts/**/*.onnx

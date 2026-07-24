@@ -4,12 +4,20 @@ import {
   getDuckGain,
   getLetterboxRatio,
   getMediaDownloadTimeoutMs,
+  getPiperBin,
+  getPiperModelDir,
+  getPiperModelStem,
   getRemixScriptMode,
   getRenderFontPath,
+  getSmartBatchMaxChars,
+  getSmartBatchMaxDurationSec,
+  getSmartBatchMaxGapSec,
   getSttCostPerMinuteUsd,
   getSttModel,
   getSttResponseFormat,
   getTtsMaxSpeed,
+  getTtsMode,
+  resolveTtsEngine,
 } from "./remix-config";
 
 describe("remix-config", () => {
@@ -144,5 +152,85 @@ describe("remix-config", () => {
   it("falls back to default duck gain for invalid values", () => {
     process.env.REMIX_DUCK_GAIN = "not-a-number";
     expect(getDuckGain()).toBe(0);
+  });
+
+  it("defaults TTS mode to fake", () => {
+    delete process.env.REMIX_TTS_MODE;
+    expect(getTtsMode()).toBe("fake");
+  });
+
+  it("reads live TTS mode from env", () => {
+    process.env.REMIX_TTS_MODE = "live";
+    expect(getTtsMode()).toBe("live");
+  });
+
+  it("reads piper TTS mode from env (piper or local alias)", () => {
+    process.env.REMIX_TTS_MODE = "piper";
+    expect(getTtsMode()).toBe("piper");
+
+    process.env.REMIX_TTS_MODE = "local";
+    expect(getTtsMode()).toBe("piper");
+  });
+
+  it("resolveTtsEngine prefers payload over remake over env", () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    expect(
+      resolveTtsEngine({
+        payloadEngine: "live",
+        remakeEngine: "piper",
+      }),
+    ).toBe("live");
+
+    expect(
+      resolveTtsEngine({
+        payloadEngine: null,
+        remakeEngine: "piper",
+      }),
+    ).toBe("piper");
+
+    process.env.REMIX_TTS_MODE = "live";
+    expect(resolveTtsEngine()).toBe("live");
+  });
+
+  it("resolveTtsEngine treats local alias as piper", () => {
+    expect(resolveTtsEngine({ payloadEngine: "local" })).toBe("piper");
+  });
+
+  it("defaults Piper bin to piper", () => {
+    delete process.env.REMIX_PIPER_BIN;
+    expect(getPiperBin()).toBe("piper");
+  });
+
+  it("reads Piper bin from env", () => {
+    process.env.REMIX_PIPER_BIN = "/usr/local/bin/piper";
+    expect(getPiperBin()).toBe("/usr/local/bin/piper");
+  });
+
+  it("defaults Piper model stem to Ngọc Huyền (mới)", () => {
+    delete process.env.REMIX_PIPER_MODEL_STEM;
+    expect(getPiperModelStem()).toBe("Ngọc Huyền (mới)");
+  });
+
+  it("honors REMIX_PIPER_MODEL_DIR override", () => {
+    process.env.REMIX_PIPER_MODEL_DIR = "/custom/models/ngoc-huyen";
+    expect(getPiperModelDir()).toBe("/custom/models/ngoc-huyen");
+  });
+
+  it("defaults smart-batch tunables", () => {
+    delete process.env.REMIX_TTS_SMART_BATCH_MAX_GAP_SEC;
+    delete process.env.REMIX_TTS_SMART_BATCH_MAX_DURATION_SEC;
+    delete process.env.REMIX_TTS_SMART_BATCH_MAX_CHARS;
+    expect(getSmartBatchMaxGapSec()).toBe(0.6);
+    expect(getSmartBatchMaxDurationSec()).toBe(12);
+    expect(getSmartBatchMaxChars()).toBe(500);
+  });
+
+  it("reads smart-batch tunables from env", () => {
+    process.env.REMIX_TTS_SMART_BATCH_MAX_GAP_SEC = "0.75";
+    process.env.REMIX_TTS_SMART_BATCH_MAX_DURATION_SEC = "15";
+    process.env.REMIX_TTS_SMART_BATCH_MAX_CHARS = "600";
+    expect(getSmartBatchMaxGapSec()).toBe(0.75);
+    expect(getSmartBatchMaxDurationSec()).toBe(15);
+    expect(getSmartBatchMaxChars()).toBe(600);
   });
 });
