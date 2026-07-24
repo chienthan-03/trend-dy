@@ -769,8 +769,12 @@ describe("RemixService.enqueueTts", () => {
   let jobsService: { enqueue: ReturnType<typeof vi.fn> };
   let remixStorage: ReturnType<typeof createRemixStorageMock>;
   let service: RemixService;
+  let previousTtsMode: string | undefined;
 
   beforeEach(() => {
+    previousTtsMode = process.env.REMIX_TTS_MODE;
+    process.env.REMIX_TTS_MODE = "live";
+
     prisma = {
       viralRemake: {
         findUnique: vi.fn(),
@@ -787,10 +791,20 @@ describe("RemixService.enqueueTts", () => {
     );
   });
 
-  it("enqueues remix_tts and resets render fields when a translated transcript exists", async () => {
+  afterEach(() => {
+    if (previousTtsMode === undefined) {
+      delete process.env.REMIX_TTS_MODE;
+    } else {
+      process.env.REMIX_TTS_MODE = previousTtsMode;
+    }
+  });
+
+  it("enqueues remix_tts with the resolved engine and resets render fields", async () => {
     prisma.viralRemake.findUnique.mockResolvedValue({
       id: "remake_1",
       sourceTranscriptTranslated: { fullText: "xin chao", segments: [] },
+      ttsEngine: null,
+      ttsVoiceId: null,
     });
 
     const result = await service.enqueueTts("remake_1");
@@ -799,12 +813,14 @@ describe("RemixService.enqueueTts", () => {
     expect(jobsService.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "remix_tts",
-        payload: { remakeId: "remake_1" },
+        payload: { remakeId: "remake_1", engine: "live" },
       }),
     );
     expect(prisma.viralRemake.update).toHaveBeenCalledWith({
       where: { id: "remake_1" },
       data: {
+        ttsEngine: "live",
+        ttsVoiceId: null,
         renderPhase: "tts",
         renderError: null,
         ttsFitFailedIndexes: [],
@@ -812,20 +828,61 @@ describe("RemixService.enqueueTts", () => {
     });
   });
 
-  it("forwards an explicit voiceId in the job payload", async () => {
+  it("forwards an explicit voiceId and engine override in the job payload", async () => {
     prisma.viralRemake.findUnique.mockResolvedValue({
       id: "remake_1",
       sourceTranscriptTranslated: { fullText: "xin chao", segments: [] },
+      ttsEngine: "live",
+      ttsVoiceId: null,
     });
 
-    await service.enqueueTts("remake_1", { voiceId: "nova" });
+    await service.enqueueTts("remake_1", { voiceId: "nova", engine: "piper" });
 
     expect(jobsService.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "remix_tts",
-        payload: { remakeId: "remake_1", voiceId: "nova" },
+        payload: { remakeId: "remake_1", engine: "piper", voiceId: "nova" },
       }),
     );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        ttsEngine: "piper",
+        ttsVoiceId: "nova",
+        renderPhase: "tts",
+        renderError: null,
+        ttsFitFailedIndexes: [],
+      },
+    });
+  });
+
+  it("keeps the previously persisted engine (or null) when resolution falls back to the fake env default", async () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceTranscriptTranslated: { fullText: "xin chao", segments: [] },
+      ttsEngine: null,
+      ttsVoiceId: null,
+    });
+
+    await service.enqueueTts("remake_1");
+
+    expect(jobsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "remix_tts",
+        payload: { remakeId: "remake_1", engine: "fake" },
+      }),
+    );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        ttsEngine: null,
+        ttsVoiceId: null,
+        renderPhase: "tts",
+        renderError: null,
+        ttsFitFailedIndexes: [],
+      },
+    });
   });
 
   it("throws BadRequestException when there is no translated transcript", async () => {

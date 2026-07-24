@@ -79,8 +79,11 @@ export class RemixController {
   }
 
   @Get(":id/cost-estimate")
-  getCostEstimate(@Param("id") id: string) {
-    return this.remixService.getCostEstimate(id);
+  getCostEstimate(
+    @Param("id") id: string,
+    @Query("engine") engine?: string,
+  ) {
+    return this.remixService.getCostEstimate(id, { engine });
   }
 
   @Patch(":id")
@@ -130,9 +133,12 @@ export class RemixController {
   @Post(":id/tts")
   enqueueTts(
     @Param("id") id: string,
-    @Body() body: { voiceId?: string } = {},
+    @Body() body: { voiceId?: string; engine?: "piper" | "live" } = {},
   ) {
-    return this.remixService.enqueueTts(id, { voiceId: body?.voiceId });
+    return this.remixService.enqueueTts(id, {
+      voiceId: body?.voiceId,
+      engine: body?.engine,
+    });
   }
 
   @Post(":id/dub-audio")

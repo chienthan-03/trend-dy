@@ -8,9 +8,12 @@ import {
   batchCuesForTts,
 } from "./tts/batch-cues-for-tts";
 import {
+  getPiperModelStem,
   getSttCostPerMinuteUsd,
   getTtsCostPer1kCharsUsd,
+  getTtsMode,
   getTtsModel,
+  resolveTtsEngine,
 } from "./remix-config";
 import {
   getTranslateProvider,
@@ -50,6 +53,10 @@ export type RemixCostEstimate = {
   };
   actions: RemixActionCostEstimate[];
   lastTtsCostUsd: number | null;
+  /** Env default collapsed for UI display — `fake` is never shown, it reads as Piper (local, $0). */
+  defaultTtsEngine: "piper" | "live";
+  /** Engine that would actually run right now (override > persisted remake > env default), display-safe. */
+  resolvedEngine: "piper" | "live";
 };
 
 const roundUsd = (value: number): number =>
@@ -81,9 +88,6 @@ const estimateClassifyTokens = (segmentCount: number) => {
   return { tokensIn, tokensOut };
 };
 
-const isLiveTts = (): boolean =>
-  process.env.REMIX_TTS_MODE?.trim().toLowerCase() === "live";
-
 const isLiveStt = (): boolean =>
   process.env.REMIX_STT_MODE?.trim().toLowerCase() === "live";
 
@@ -96,7 +100,24 @@ export const buildRemixCostEstimate = (input: {
   sourceTranscript: RemixTranscriptV1 | null;
   translatedTranscript: RemixTranscriptV1 | null;
   lastTtsCostUsd?: number | null;
+  /** Persisted engine on the remake (`remake.ttsEngine`), if any. */
+  ttsEngine?: string | null;
+  /** Query/body override so the UI can preview cost before persisting (Task 9). */
+  ttsEngineOverride?: string | null;
 }): RemixCostEstimate => {
+  const ttsMode = getTtsMode();
+  const resolvedEngine = resolveTtsEngine({
+    payloadEngine: input.ttsEngineOverride ?? null,
+    remakeEngine: input.ttsEngine ?? null,
+  });
+  // `fake` is env/CI-only and never a real user choice — display it as Piper
+  // (free, local) so the UI never shows an engine the user didn't pick.
+  const defaultTtsEngine: "piper" | "live" = ttsMode === "live" ? "live" : "piper";
+  const resolvedEngineForDisplay: "piper" | "live" =
+    resolvedEngine === "live" ? "live" : "piper";
+  const isPiperResolved = resolvedEngine === "piper";
+  const isLiveResolved = resolvedEngine === "live" && ttsMode === "live";
+
   const durationSec =
     input.videoDurationSec ??
     input.sourceTranscript?.durationSec ??
@@ -199,7 +220,16 @@ export const buildRemixCostEstimate = (input: {
       available: false,
       detail: "Cần bản dịch VI trước",
     };
-  } else if (!isLiveTts()) {
+  } else if (isPiperResolved) {
+    tts = {
+      action: "tts",
+      label: "Tạo audio VI (TTS)",
+      estimatedUsd: 0,
+      available: true,
+      charCount: viChars,
+      detail: `Piper local · ${getPiperModelStem()} · $0`,
+    };
+  } else if (!isLiveResolved) {
     tts = {
       action: "tts",
       label: "Tạo audio VI (TTS)",
@@ -308,6 +338,8 @@ export const buildRemixCostEstimate = (input: {
       input.lastTtsCostUsd != null && Number.isFinite(input.lastTtsCostUsd)
         ? input.lastTtsCostUsd
         : null,
+    defaultTtsEngine,
+    resolvedEngine: resolvedEngineForDisplay,
   };
 };
 

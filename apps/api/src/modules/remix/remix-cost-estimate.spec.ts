@@ -93,4 +93,81 @@ describe("buildRemixCostEstimate", () => {
       0,
     );
   });
+
+  it("exposes defaultTtsEngine=live and resolvedEngine=live when mode is live and nothing overrides it", () => {
+    const estimate = buildRemixCostEstimate({
+      remakeId: "r1",
+      videoDurationSec: 60,
+      sourceTranscript: transcript([{ text: "a", startSec: 0, endSec: 1 }]),
+      translatedTranscript: transcript([
+        { text: "xin chào".repeat(20), startSec: 0, endSec: 5 },
+      ]),
+    });
+    expect(estimate.defaultTtsEngine).toBe("live");
+    expect(estimate.resolvedEngine).toBe("live");
+  });
+
+  it("collapses fake to piper for defaultTtsEngine and resolvedEngine when mode is not live", () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    const estimate = buildRemixCostEstimate({
+      remakeId: "r1",
+      videoDurationSec: 60,
+      sourceTranscript: transcript([{ text: "a", startSec: 0, endSec: 1 }]),
+      translatedTranscript: transcript([
+        { text: "xin chào".repeat(20), startSec: 0, endSec: 5 },
+      ]),
+    });
+    expect(estimate.defaultTtsEngine).toBe("piper");
+    expect(estimate.resolvedEngine).toBe("piper");
+  });
+
+  it("returns $0 with a Piper detail when the resolved engine is piper even though mode is live", () => {
+    const estimate = buildRemixCostEstimate({
+      remakeId: "r1",
+      videoDurationSec: 60,
+      sourceTranscript: transcript([{ text: "a", startSec: 0, endSec: 1 }]),
+      translatedTranscript: transcript([
+        { text: "xin chào".repeat(20), startSec: 0, endSec: 5 },
+      ]),
+      ttsEngine: "piper",
+    });
+    const tts = estimate.actions.find((a) => a.action === "tts");
+    expect(tts?.estimatedUsd).toBe(0);
+    expect(tts?.detail).toContain("Piper local");
+    expect(estimate.resolvedEngine).toBe("piper");
+  });
+
+  it("accepts an engine override so the UI can preview Piper cost before persisting", () => {
+    const estimate = buildRemixCostEstimate({
+      remakeId: "r1",
+      videoDurationSec: 60,
+      sourceTranscript: transcript([{ text: "a", startSec: 0, endSec: 1 }]),
+      translatedTranscript: transcript([
+        { text: "xin chào".repeat(20), startSec: 0, endSec: 5 },
+      ]),
+      ttsEngine: "live",
+      ttsEngineOverride: "piper",
+    });
+    const tts = estimate.actions.find((a) => a.action === "tts");
+    expect(tts?.estimatedUsd).toBe(0);
+    expect(tts?.detail).toContain("Piper local");
+    expect(estimate.resolvedEngine).toBe("piper");
+  });
+
+  it("returns $0 when the resolved engine is live but REMIX_TTS_MODE is not actually live", () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    const estimate = buildRemixCostEstimate({
+      remakeId: "r1",
+      videoDurationSec: 60,
+      sourceTranscript: transcript([{ text: "a", startSec: 0, endSec: 1 }]),
+      translatedTranscript: transcript([
+        { text: "xin chào".repeat(20), startSec: 0, endSec: 5 },
+      ]),
+      ttsEngine: "live",
+    });
+    const tts = estimate.actions.find((a) => a.action === "tts");
+    expect(tts?.estimatedUsd).toBe(0);
+    expect(estimate.resolvedEngine).toBe("live");
+    expect(estimate.defaultTtsEngine).toBe("piper");
+  });
 });

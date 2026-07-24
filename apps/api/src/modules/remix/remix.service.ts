@@ -26,7 +26,13 @@ import {
   convertWavToMp3,
   probeAudioDurationSec,
 } from "./remix-audio.util";
-import { assertFullScriptAllowed, getDubMaxUploadMb, getRemixScriptMode, isMediaDownloadAllowed } from "./remix-config";
+import {
+  assertFullScriptAllowed,
+  getDubMaxUploadMb,
+  getRemixScriptMode,
+  isMediaDownloadAllowed,
+  resolveTtsEngine,
+} from "./remix-config";
 import { RemixStorageService } from "./remix-storage.service";
 import {
   classifyTranslatedSegments,
@@ -181,7 +187,7 @@ export class RemixService {
     };
   }
 
-  async getCostEstimate(id: string) {
+  async getCostEstimate(id: string, opts: { engine?: string } = {}) {
     const remake = await this.getRemake(id);
     return buildRemixCostEstimate({
       remakeId: remake.id,
@@ -192,6 +198,8 @@ export class RemixService {
         (remake.sourceTranscriptTranslated as RemixTranscriptV1 | null) ??
         null,
       lastTtsCostUsd: remake.ttsCostUsd,
+      ttsEngine: remake.ttsEngine,
+      ttsEngineOverride: opts.engine,
     });
   }
 
@@ -284,7 +292,7 @@ export class RemixService {
 
   async enqueueTts(
     id: string,
-    opts: { voiceId?: string } = {},
+    opts: { voiceId?: string; engine?: "piper" | "live" } = {},
   ): Promise<TriggerRemixResult> {
     const remake = await this.getRemake(id);
 
@@ -294,17 +302,27 @@ export class RemixService {
       );
     }
 
+    const engine = resolveTtsEngine({
+      payloadEngine: opts.engine,
+      remakeEngine: remake.ttsEngine,
+    });
+
     const job = await this.jobsService.enqueue({
       type: "remix_tts",
       payload: opts.voiceId
-        ? { remakeId: remake.id, voiceId: opts.voiceId }
-        : { remakeId: remake.id },
+        ? { remakeId: remake.id, engine, voiceId: opts.voiceId }
+        : { remakeId: remake.id, engine },
       idempotencyKey: `remix_tts:${remake.id}:${Date.now()}`,
     });
 
     await this.prisma.viralRemake.update({
       where: { id: remake.id },
       data: {
+        // `fake` is CI/env-only and never persisted as a real choice — keep
+        // whatever engine the remake already had (or null) so the UI never
+        // flips to a fake value.
+        ttsEngine: engine === "fake" ? remake.ttsEngine : engine,
+        ttsVoiceId: opts.voiceId ?? remake.ttsVoiceId,
         renderPhase: "tts",
         renderError: null,
         ttsFitFailedIndexes: [],
