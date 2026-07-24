@@ -113,10 +113,15 @@ const normalizeEngine = (value?: string | null): TtsEngine | null => {
 export const getPiperBin = (): string =>
   process.env.REMIX_PIPER_BIN?.trim() || "piper";
 
-export const getPiperModelDir = (): string =>
-  process.env.REMIX_PIPER_MODEL_DIR?.trim() ||
-  // resolve relative to apps/api at runtime in adapter if needed
-  join(process.cwd(), "models", "tts", "ngoc-huyen");
+export const getPiperModelDir = (): string => {
+  const configured = process.env.REMIX_PIPER_MODEL_DIR?.trim();
+  if (configured) return configured;
+  // Must work when worker cwd is monorepo root OR apps/api:
+  // try join(cwd, "apps/api/models/tts/ngoc-huyen"), then
+  // join(cwd, "models/tts/ngoc-huyen"), return first existing dir
+  // (absolute path). Document REMIX_PIPER_MODEL_DIR in .env.example as override.
+  return resolveDefaultPiperModelDir();
+};
 
 export const getPiperModelStem = (): string =>
   process.env.REMIX_PIPER_MODEL_STEM?.trim() || "Ngọc Huyền (mới)";
@@ -228,6 +233,7 @@ git commit -m "feat(remix): add Vietnamese TTS text normalizer"
 - Create: `apps/api/src/modules/remix/tts/piper-tts.adapter.ts`
 - Create: `apps/api/src/modules/remix/tts/piper-tts.adapter.spec.ts`
 - Modify: `apps/api/src/modules/remix/tts/tts.adapter.ts`
+- Modify: `apps/api/src/modules/remix/tts/tts.adapter.spec.ts` (add `piper` engine case / signature)
 
 - [ ] **Step 1: Failing tests**
 
@@ -475,6 +481,7 @@ Bootstrap rule from spec: persisted wins; else env default from API (**never** f
 - Select: Local (Ngọc Huyền) | Live (Grok)  
 - Hide/disable Grok voice dropdown when `engine === "piper"`  
 - Hint text for cost  
+- On engine toggle, **re-fetch cost-estimate with `engine=`** so Local shows `$0` before persist (not only after TTS)  
 - `enqueueTts({ engine, voiceId: engine === "live" ? voiceId : undefined })`
 
 - [ ] **Step 3: Manual smoke checklist note** in panel or plan smoke section
