@@ -58,6 +58,6 @@ Open:  http://localhost:3000/login
 Also ensure:
   - Redis 7 on 127.0.0.1:6380  (.\scripts\start-redis.ps1)
     Old winget Redis 3.0 on 6379 is NOT compatible with BullMQ.
-  - MinIO on 127.0.0.1:9000  (winget install MinIO.Server)
-  - Bucket 'factory' in MinIO console http://127.0.0.1:9001
+  - MinIO on 127.0.0.1:19000  (winget install MinIO.Server)
+  - Bucket 'factory' in MinIO console http://127.0.0.1:19001
 "@

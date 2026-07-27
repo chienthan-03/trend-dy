@@ -37,6 +37,28 @@ export const getTtsBatchMode = (): "batch" | "per_cue" => {
   return "batch";
 };
 
+/**
+ * Piper default `per_cue`: one synthesis per transcript cue so audio is never
+ * ratio-split (smart-batch cuts lose syllables at boundaries — "mất chữ").
+ * Set `REMIX_PIPER_TTS_BATCH_MODE=smart` to merge cues for speed.
+ */
+export const getPiperTtsBatchMode = (): "smart" | "per_cue" => {
+  const mode = process.env.REMIX_PIPER_TTS_BATCH_MODE?.trim().toLowerCase();
+  if (mode === "smart") return "smart";
+  return "per_cue";
+};
+
+/** One TTS call per non-empty cue (no post-synthesis audio splitting). */
+export const perCueBatchesForTts = (cues: CueForBatch[]): TtsCueBatch[] =>
+  cues
+    .filter((cue) => cue.text.trim().length > 0)
+    .map((cue) => ({
+      segmentIndexes: [cue.index],
+      cues: [cue],
+      text: cue.text.trim(),
+      totalWindowSec: cueWindowSec(cue),
+    }));
+
 const cueWindowSec = (cue: CueForBatch): number =>
   Math.max(cue.endSec - cue.startSec, 0.1);
 

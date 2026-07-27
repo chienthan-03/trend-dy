@@ -15,6 +15,7 @@ import { createRemixMediaAdapter } from "../../modules/remix/remix-media.adapter
 import * as assembleDub from "../../modules/remix/tts/assemble-dub";
 import * as batchCuesForTtsModule from "../../modules/remix/tts/batch-cues-for-tts";
 import * as smartBatchCuesModule from "../../modules/remix/tts/smart-batch-cues";
+import * as segmentFit from "../../modules/remix/tts/segment-fit";
 import { FakeTtsAdapter } from "../../modules/remix/tts/fake-tts.adapter";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 
@@ -75,12 +76,19 @@ vi.mock("../../ai/translate", () => ({
   }),
 }));
 
+const { probeClipDurationSecMock } = vi.hoisted(() => ({
+  probeClipDurationSecMock: vi.fn(
+    async (_buffer: Buffer, fallbackSec: number) => fallbackSec,
+  ),
+}));
+
 vi.mock("../../modules/remix/remix-audio.util", () => ({
   extractAudioForStt: vi.fn().mockResolvedValue({
     buffer: Buffer.from("audio"),
     contentType: "audio/mpeg",
     fileName: "audio.mp3",
   }),
+  probeClipDurationSec: probeClipDurationSecMock,
 }));
 
 vi.mock("../../modules/remix/remix-media.adapter", () => ({
@@ -190,6 +198,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
     process.env.REMIX_TTS_CACHE = "off";
     delete process.env.REMIX_TTS_MAX_SPEED;
     delete process.env.REMIX_TTS_BATCH_MODE;
+    delete process.env.REMIX_PIPER_TTS_BATCH_MODE;
     delete process.env.REMIX_TTS_AUDIO_MODE;
     delete process.env.REMIX_TTS_TIMING_MODE;
     mockGetVideoDetail.mockResolvedValue({
@@ -566,6 +575,46 @@ describe("RemixProcessor (Full Script Mode)", () => {
     });
   });
 
+  it("handleTts applies per-remake base speed from remake.ttsSpeed", async () => {
+    const applyBaseSpy = vi.spyOn(segmentFit, "applyBaseTtsSpeed");
+    process.env.REMIX_TTS_BATCH_MODE = "per_cue";
+    process.env.REMIX_TTS_TIMING_MODE = "sequential";
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsSpeed: 1.15,
+      ttsMaxSpeed: null,
+      videoDurationSec: 6,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 6,
+        segments: [
+          { startSec: 0, endSec: 3, text: "Xin chào", role: "narration", roleSource: "manual" },
+          { startSec: 3, endSec: 6, text: "Tạm biệt", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "Xin chào Tạm biệt",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_speed",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(applyBaseSpy).toHaveBeenCalled();
+    expect(applyBaseSpy.mock.calls.every((call) => call[2] === 1.15)).toBe(true);
+    applyBaseSpy.mockRestore();
+  });
+
   it("handleTts skips synthesis when dubSource is upload with existing dub audio", async () => {
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
@@ -692,6 +741,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
   });
 
   it("handleTts trusts fine cue windows without sentence-split or speech align", async () => {
+    process.env.REMIX_TTS_TIMING_MODE = "strict";
     const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
     const assembleSpy = vi.spyOn(assembleDub, "assembleDubTimeline");
 
@@ -859,6 +909,108 @@ describe("RemixProcessor (Full Script Mode)", () => {
     // segment B would trigger `plan.action === "shorten"` against its ZH
     // window (1.5s) if it were pinned, but hybrid must skip shorten for it.
     expect(shortenSegmentText).not.toHaveBeenCalled();
+  });
+
+  it("handleTts hybrid defers next cue when probed audio exceeds slice estimate", async () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    process.env.REMIX_TTS_AUDIO_MODE = "replace";
+    process.env.REMIX_TTS_TIMING_MODE = "hybrid";
+    process.env.REMIX_TTS_BATCH_MODE = "per_cue";
+
+    probeClipDurationSecMock.mockImplementation(async (_buffer, fallbackSec) => {
+      if (Math.abs(fallbackSec - 2) < 0.01) {
+        return 3.5;
+      }
+      return fallbackSec;
+    });
+
+    const assembleSpy = vi.spyOn(assembleDub, "assembleDubTimeline");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsEngine: null,
+      videoDurationSec: 10,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 10,
+        segments: [
+          { startSec: 0, endSec: 1, text: "Hi", role: "narration", roleSource: "manual" },
+          {
+            startSec: 1,
+            endSec: 3,
+            text: "B".repeat(40),
+            role: "narration",
+            roleSource: "manual",
+          },
+          { startSec: 2, endSec: 4, text: "End", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "…",
+      },
+    });
+
+    await processor.process({
+      id: "job_hybrid_probe",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as never);
+
+    const segs = assembleSpy.mock.calls[0]![0].segments as Array<{ startSec: number }>;
+    expect(segs[2]!.startSec).toBeGreaterThanOrEqual(4.45);
+  });
+
+  it("handleTts replace defers overlapping cues after fit", async () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    process.env.REMIX_TTS_AUDIO_MODE = "replace";
+    process.env.REMIX_TTS_TIMING_MODE = "hybrid";
+    process.env.REMIX_TTS_BATCH_MODE = "per_cue";
+
+    probeClipDurationSecMock.mockImplementation(async (_buffer, fallbackSec) => {
+      if (Math.abs(fallbackSec - 2) < 0.01) {
+        return 3.2;
+      }
+      return fallbackSec;
+    });
+
+    const assembleSpy = vi.spyOn(assembleDub, "assembleDubTimeline");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsEngine: null,
+      videoDurationSec: 10,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 10,
+        segments: [
+          { startSec: 0, endSec: 1, text: "Hi", role: "narration", roleSource: "manual" },
+          {
+            startSec: 1,
+            endSec: 3,
+            text: "B".repeat(40),
+            role: "narration",
+            roleSource: "manual",
+          },
+          { startSec: 2, endSec: 4, text: "End", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "…",
+      },
+    });
+
+    await processor.process({
+      id: "job_finalize_overlap",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as never);
+
+    const segs = assembleSpy.mock.calls[0]![0].segments as Array<{ startSec: number }>;
+    expect(segs[2]!.startSec).toBeGreaterThanOrEqual(4.15);
   });
 
   it("handleTts strict keeps ZH startSec for narration", async () => {
@@ -1030,7 +1182,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
     );
   });
 
-  it("handleTts resolves engine=piper from remake.ttsEngine, smart-batches, normalizes text, and never constructs HttpTtsAdapter", async () => {
+  it("handleTts resolves engine=piper from remake.ttsEngine, per-cue batches by default, normalizes text", async () => {
     const smartSpy = vi.spyOn(smartBatchCuesModule, "smartBatchCuesForTts");
     const ratioSpy = vi.spyOn(batchCuesForTtsModule, "batchCuesForTts");
 
@@ -1063,11 +1215,11 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
     await processor.process(job);
 
-    expect(smartSpy).toHaveBeenCalled();
+    expect(smartSpy).not.toHaveBeenCalled();
     expect(ratioSpy).not.toHaveBeenCalled();
     expect(httpCtorSpy).not.toHaveBeenCalled();
     expect(piperCtorSpy).toHaveBeenCalledTimes(1);
-    expect(piperSynthesizeMock).toHaveBeenCalled();
+    expect(piperSynthesizeMock).toHaveBeenCalledTimes(2);
 
     // Text sent to Piper is normalized (digits/percent spelled out for VI TTS).
     const synthesizeCall = piperSynthesizeMock.mock.calls[0]![0] as {
@@ -1091,6 +1243,41 @@ describe("RemixProcessor (Full Script Mode)", () => {
 
     smartSpy.mockRestore();
     ratioSpy.mockRestore();
+  });
+
+  it("handleTts piper smart-batch when REMIX_PIPER_TTS_BATCH_MODE=smart", async () => {
+    process.env.REMIX_PIPER_TTS_BATCH_MODE = "smart";
+    const smartSpy = vi.spyOn(smartBatchCuesModule, "smartBatchCuesForTts");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsEngine: "piper",
+      videoDurationSec: 6,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 6,
+        segments: [
+          { startSec: 0, endSec: 3, text: "Xin chào", role: "narration", roleSource: "manual" },
+          { startSec: 3, endSec: 6, text: "Tạm biệt", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "Xin chào Tạm biệt",
+      },
+    });
+
+    await processor.process({
+      id: "job_tts_piper_smart",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as never);
+
+    expect(smartSpy).toHaveBeenCalled();
+    expect(piperSynthesizeMock).toHaveBeenCalledTimes(1);
+
+    smartSpy.mockRestore();
   });
 
   it("handleTts resolves engine=live from payload.engine (overriding remake.ttsEngine), uses ratio batch, and never constructs PiperTtsAdapter", async () => {

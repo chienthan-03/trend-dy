@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildMinimalWav, extractAudioForStt, extractAudioWav } from "./remix-audio.util";
+import { buildMinimalWav, extractAudioForStt, extractAudioWav, probeClipDurationSec } from "./remix-audio.util";
 
 const runFfmpeg = (ffmpegPath: string, args: string[]): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -38,6 +38,18 @@ describe("buildMinimalWav", () => {
     expect(wav.readUInt16LE(34)).toBe(16);
     expect(wav.subarray(36, 40).toString("ascii")).toBe("data");
     expect(wav.length).toBe(44 + 16000 * 2);
+  });
+});
+
+describe("probeClipDurationSec", () => {
+  it("falls back to estimate when probe cannot read the buffer", async () => {
+    const durationSec = await probeClipDurationSec(Buffer.from("not-mp3"), 2.5);
+    expect(durationSec).toBe(2.5);
+  });
+
+  it("never returns below 50ms", async () => {
+    const durationSec = await probeClipDurationSec(Buffer.from("x"), 0);
+    expect(durationSec).toBe(0.05);
   });
 });
 

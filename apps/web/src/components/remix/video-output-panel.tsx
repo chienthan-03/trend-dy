@@ -32,6 +32,27 @@ const ENGINE_HINTS: Record<TtsEngine, string> = {
   live: "Dùng credit — tính phí theo ký tự.",
 };
 
+const TTS_SPEED_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 0.85, label: "Chậm (0.85×)" },
+  { value: 1, label: "Bình thường (1.0×)" },
+  { value: 1.15, label: "Nhanh (1.15×)" },
+];
+
+const TTS_MAX_SPEED_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "server", label: "Theo server" },
+  { value: "1", label: "1.0×" },
+  { value: "1.25", label: "1.25×" },
+  { value: "1.5", label: "1.5×" },
+];
+
+const resolveTtsSpeedValue = (remake: ViralRemake): number => {
+  const speed = remake.ttsSpeed ?? 1;
+  return TTS_SPEED_OPTIONS.some((option) => option.value === speed) ? speed : 1;
+};
+
+const resolveTtsMaxSpeedSelectValue = (remake: ViralRemake): string =>
+  remake.ttsMaxSpeed == null ? "server" : String(remake.ttsMaxSpeed);
+
 /** Bootstrap: prefer the persisted engine, else server default — never silently assume live. */
 const resolveInitialEngine = (
   remake: ViralRemake,
@@ -86,6 +107,10 @@ export const VideoOutputPanel = ({
   const [voiceId, setVoiceId] = useState<string>(
     remake.ttsVoiceId || VOICE_OPTIONS[0].id,
   );
+  const [ttsSpeed, setTtsSpeed] = useState<number>(() => resolveTtsSpeedValue(remake));
+  const [ttsMaxSpeed, setTtsMaxSpeed] = useState<string>(() =>
+    resolveTtsMaxSpeedSelectValue(remake),
+  );
   const [engine, setEngine] = useState<TtsEngine>(() =>
     resolveInitialEngine(remake, costEstimate),
   );
@@ -104,6 +129,8 @@ export const VideoOutputPanel = ({
     remakeIdRef.current = remake.id;
     setRenderMode(remake.renderMode ?? "audio_only");
     setVoiceId(remake.ttsVoiceId || VOICE_OPTIONS[0].id);
+    setTtsSpeed(resolveTtsSpeedValue(remake));
+    setTtsMaxSpeed(resolveTtsMaxSpeedSelectValue(remake));
     setBannerHeader(remake.bannerJson?.header ?? "");
     setBannerBottom(remake.bannerJson?.bottom ?? "");
     engineTouchedRef.current = false;
@@ -175,6 +202,34 @@ export const VideoOutputPanel = ({
     setPending("voice");
     try {
       const updated = await api.remix.update(remake.id, { ttsVoiceId: id });
+      onRemakeChange(updated);
+    } catch (err) {
+      onError(getErrorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const handleTtsSpeedChange = async (value: string) => {
+    const nextSpeed = Number(value);
+    setTtsSpeed(nextSpeed);
+    setPending("ttsSpeed");
+    try {
+      const updated = await api.remix.update(remake.id, { ttsSpeed: nextSpeed });
+      onRemakeChange(updated);
+    } catch (err) {
+      onError(getErrorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const handleTtsMaxSpeedChange = async (value: string) => {
+    setTtsMaxSpeed(value);
+    setPending("ttsMaxSpeed");
+    try {
+      const nextMaxSpeed = value === "server" ? null : Number(value);
+      const updated = await api.remix.update(remake.id, { ttsMaxSpeed: nextMaxSpeed });
       onRemakeChange(updated);
     } catch (err) {
       onError(getErrorMessage(err));
@@ -424,6 +479,43 @@ export const VideoOutputPanel = ({
               </option>
             ))}
           </Select>
+        </div>
+
+        <div className="grid gap-1 sm:max-w-xs">
+          <Label htmlFor="tts-speed">Tốc độ đọc</Label>
+          <Select
+            id="tts-speed"
+            value={String(ttsSpeed)}
+            onChange={(event) => handleTtsSpeedChange(event.target.value)}
+            disabled={pending === "ttsSpeed"}
+            aria-label="Chọn tốc độ đọc TTS"
+          >
+            {TTS_SPEED_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+
+        <div className="grid gap-1 sm:max-w-xs">
+          <Label htmlFor="tts-max-speed">Khớp timeline tối đa</Label>
+          <Select
+            id="tts-max-speed"
+            value={ttsMaxSpeed}
+            onChange={(event) => handleTtsMaxSpeedChange(event.target.value)}
+            disabled={pending === "ttsMaxSpeed"}
+            aria-label="Chọn giới hạn tăng tốc khi khớp timeline"
+          >
+            {TTS_MAX_SPEED_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
+          <p className="text-xs text-gray-500">
+            Cần bấm «Tạo audio VI» lại sau khi đổi tốc độ.
+          </p>
         </div>
       </fieldset>
 

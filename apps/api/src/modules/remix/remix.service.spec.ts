@@ -1208,6 +1208,30 @@ describe("RemixService.updateRemake", () => {
     });
   });
 
+  it("persists ttsSpeed and ttsMaxSpeed when provided", async () => {
+    await service.updateRemake("remake_1", {
+      ttsSpeed: 1.15,
+      ttsMaxSpeed: 1.5,
+    });
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        ttsSpeed: 1.15,
+        ttsMaxSpeed: 1.5,
+      },
+    });
+  });
+
+  it("allows clearing ttsMaxSpeed to fall back to server env", async () => {
+    await service.updateRemake("remake_1", { ttsMaxSpeed: null });
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: { ttsMaxSpeed: null },
+    });
+  });
+
   it("leaves fields untouched when not provided", async () => {
     await service.updateRemake("remake_1", { editorNotes: "note" });
 

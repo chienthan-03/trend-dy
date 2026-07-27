@@ -132,6 +132,19 @@ export const probeAudioDurationSec = async (
   }
 };
 
+/** Probe MP3 duration; fall back to estimate when ffprobe cannot read the buffer. */
+export const probeClipDurationSec = async (
+  buffer: Buffer,
+  fallbackSec: number,
+): Promise<number> => {
+  const probed = await probeAudioDurationSec(buffer, "mp3");
+  if (probed != null && Number.isFinite(probed) && probed > 0) {
+    return probed;
+  }
+
+  return Math.max(fallbackSec, 0.05);
+};
+
 /** Probe source video width/height (px) via ffprobe; null if unavailable. */
 export const probeVideoDimensions = async (
   videoBuffer: Buffer,

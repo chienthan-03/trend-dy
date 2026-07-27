@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPad, applyTempo, planSegmentFit } from "./segment-fit";
+import { applyBaseTtsSpeed, applyPad, applyTempo, planSegmentFit } from "./segment-fit";
 
 describe("planSegmentFit", () => {
   it("pads when audio shorter than window", () => {
@@ -45,6 +45,12 @@ describe("applyPad / applyTempo", () => {
   it("returns passthrough buffer in fake mode for applyTempo", async () => {
     const result = await applyTempo(input, 1.25);
     expect(result).toBe(input);
+  });
+
+  it("scales duration in fake mode for applyBaseTtsSpeed", async () => {
+    const result = await applyBaseTtsSpeed(input, 4, 1.25);
+    expect(result.buffer).toBe(input);
+    expect(result.durationSec).toBeCloseTo(3.2, 5);
   });
 
   it("returns passthrough buffer in fake mode for applyTruncate", async () => {

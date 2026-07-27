@@ -220,6 +220,12 @@ export class RemixService {
     if (dto.ttsVoiceId !== undefined) {
       data.ttsVoiceId = dto.ttsVoiceId;
     }
+    if (dto.ttsSpeed !== undefined) {
+      data.ttsSpeed = dto.ttsSpeed;
+    }
+    if (dto.ttsMaxSpeed !== undefined) {
+      data.ttsMaxSpeed = dto.ttsMaxSpeed;
+    }
     if (dto.bannerJson !== undefined) {
       data.bannerJson = dto.bannerJson as Prisma.InputJsonValue;
     }

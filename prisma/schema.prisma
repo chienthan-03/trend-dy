@@ -185,6 +185,8 @@ model ViralRemake {
   bannerJson                 Json?     @map("banner_json")
   renderOutputKey            String?   @map("render_output_key")
   ttsVoiceId                 String?   @map("tts_voice_id")
+  ttsSpeed                   Float     @default(1) @map("tts_speed")
+  ttsMaxSpeed                Float?    @map("tts_max_speed")
   ttsEngine                  String?   @map("tts_engine") // piper | live
   ttsCostUsd                 Float?    @map("tts_cost_usd")
   ttsFitFailedIndexes        Int[]     @default([]) @map("tts_fit_failed_indexes")

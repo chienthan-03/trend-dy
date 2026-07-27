@@ -54,6 +54,33 @@ export const getTtsMaxSpeed = (): number => {
   return Number.isFinite(n) && n > 0 ? n : 1.25;
 };
 
+export const TTS_SPEED_MIN = 0.75;
+export const TTS_SPEED_MAX = 1.25;
+export const TTS_MAX_SPEED_MIN = 1;
+export const TTS_MAX_SPEED_MAX = 2;
+
+export const getDefaultTtsSpeed = (): number => {
+  const n = Number(process.env.REMIX_TTS_DEFAULT_SPEED ?? "1");
+  return Number.isFinite(n) && n > 0 ? n : 1;
+};
+
+export const resolveTtsSpeed = (remakeSpeed?: number | null): number => {
+  const raw = remakeSpeed ?? getDefaultTtsSpeed();
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  return Math.min(TTS_SPEED_MAX, Math.max(TTS_SPEED_MIN, raw));
+};
+
+export const resolveTtsMaxSpeed = (remakeMaxSpeed?: number | null): number => {
+  if (
+    remakeMaxSpeed != null &&
+    Number.isFinite(remakeMaxSpeed) &&
+    remakeMaxSpeed > 0
+  ) {
+    return Math.min(TTS_MAX_SPEED_MAX, Math.max(TTS_MAX_SPEED_MIN, remakeMaxSpeed));
+  }
+  return getTtsMaxSpeed();
+};
+
 /**
  * How TTS dub is mixed into the final render:
  * - `replace` (default): TTS every cue; full soundtrack replace (continuous VI).
@@ -67,12 +94,13 @@ export const getTtsAudioMode = (): TtsAudioMode => {
   return "replace";
 };
 
-export type TtsTimingMode = "hybrid" | "strict";
+export type TtsTimingMode = "sequential" | "hybrid" | "strict";
 
 export const getTtsTimingMode = (): TtsTimingMode => {
   const raw = process.env.REMIX_TTS_TIMING_MODE?.trim().toLowerCase();
   if (raw === "strict") return "strict";
-  return "hybrid";
+  if (raw === "hybrid") return "hybrid";
+  return "sequential";
 };
 
 export const getHybridBlockGapSec = (): number => {

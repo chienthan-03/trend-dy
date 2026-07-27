@@ -15,7 +15,10 @@ import {
   getSttCostPerMinuteUsd,
   getSttModel,
   getSttResponseFormat,
+  getDefaultTtsSpeed,
   getTtsMaxSpeed,
+  resolveTtsMaxSpeed,
+  resolveTtsSpeed,
   getTtsAudioMode,
   getTtsTimingMode,
   getTtsMode,
@@ -88,6 +91,35 @@ describe("remix-config", () => {
     expect(getTtsMaxSpeed()).toBe(1.5);
   });
 
+  it("defaults TTS base speed to 1", () => {
+    delete process.env.REMIX_TTS_DEFAULT_SPEED;
+    expect(getDefaultTtsSpeed()).toBe(1);
+  });
+
+  it("reads TTS default speed from env", () => {
+    process.env.REMIX_TTS_DEFAULT_SPEED = "1.1";
+    expect(getDefaultTtsSpeed()).toBe(1.1);
+  });
+
+  it("clamps resolveTtsSpeed to 0.75–1.25", () => {
+    expect(resolveTtsSpeed(0.5)).toBe(0.75);
+    expect(resolveTtsSpeed(2)).toBe(1.25);
+    expect(resolveTtsSpeed(1)).toBe(1);
+    expect(resolveTtsSpeed(null)).toBe(1);
+  });
+
+  it("resolveTtsMaxSpeed prefers remake override over env", () => {
+    process.env.REMIX_TTS_MAX_SPEED = "1.25";
+    expect(resolveTtsMaxSpeed(1.5)).toBe(1.5);
+    expect(resolveTtsMaxSpeed(null)).toBe(1.25);
+    expect(resolveTtsMaxSpeed(undefined)).toBe(1.25);
+  });
+
+  it("clamps resolveTtsMaxSpeed to 1–2", () => {
+    expect(resolveTtsMaxSpeed(0.5)).toBe(1);
+    expect(resolveTtsMaxSpeed(3)).toBe(2);
+  });
+
   it("defaults OpenRouter TTS model to Grok Voice", async () => {
     const { getTtsModel, resolveTtsVoiceId } = await import("./remix-config");
     process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
@@ -150,8 +182,13 @@ describe("remix-config", () => {
     expect(getTtsAudioMode()).toBe("replace");
   });
 
-  it("defaults TTS timing mode to hybrid", () => {
+  it("defaults TTS timing mode to sequential", () => {
     delete process.env.REMIX_TTS_TIMING_MODE;
+    expect(getTtsTimingMode()).toBe("sequential");
+  });
+
+  it("honors REMIX_TTS_TIMING_MODE=hybrid", () => {
+    process.env.REMIX_TTS_TIMING_MODE = "hybrid";
     expect(getTtsTimingMode()).toBe("hybrid");
   });
 
@@ -160,9 +197,9 @@ describe("remix-config", () => {
     expect(getTtsTimingMode()).toBe("strict");
   });
 
-  it("falls back to hybrid for unknown timing mode", () => {
+  it("falls back to sequential for unknown timing mode", () => {
     process.env.REMIX_TTS_TIMING_MODE = "elastic";
-    expect(getTtsTimingMode()).toBe("hybrid");
+    expect(getTtsTimingMode()).toBe("sequential");
   });
 
   it("reads duck gain from env", () => {

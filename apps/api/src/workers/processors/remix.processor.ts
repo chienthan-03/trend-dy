@@ -27,16 +27,19 @@ import {
   getPiperModelStem,
   getRemixScriptMode,
   getTtsAudioMode,
-  getTtsMaxSpeed,
   getTtsModel,
   getTtsTimingMode,
   resolveTtsEngine,
+  resolveTtsMaxSpeed,
+  resolveTtsSpeed,
 } from "../../modules/remix/remix-config";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "../../modules/remix/translate-config";
 import { assembleDubTimeline } from "../../modules/remix/tts/assemble-dub";
 import {
   batchCuesForTts,
+  getPiperTtsBatchMode,
   getTtsBatchMode,
+  perCueBatchesForTts,
   type CueForBatch,
 } from "../../modules/remix/tts/batch-cues-for-tts";
 import { splitBatchAudioToCues } from "../../modules/remix/tts/split-batch-audio";
@@ -49,9 +52,12 @@ import {
   splitSmartBatchAudioToCues,
 } from "../../modules/remix/tts/smart-batch-cues";
 import {
+  applyBaseTtsSpeed,
   applyFitToTarget,
   planSegmentFit,
 } from "../../modules/remix/tts/segment-fit";
+import { finalizeDubTimeline } from "../../modules/remix/tts/finalize-dub-timeline";
+import { planSequentialTimeline } from "../../modules/remix/tts/sequential-timeline";
 import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
 import {
   effectiveRole,
@@ -65,6 +71,7 @@ import {
 } from "../../modules/remix/tts/tts-batch-cache";
 import { createTtsAdapter } from "../../modules/remix/tts/tts.adapter";
 import { normalizeVietnameseForTts } from "../../modules/remix/tts/viet-normalize";
+import { probeClipDurationSec } from "../../modules/remix/remix-audio.util";
 
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
 import { RemixRenderService } from "../../modules/remix/remix-render.service";
@@ -763,7 +770,8 @@ export class RemixProcessor extends WorkerHost {
     // through the fixed Ngọc Huyền model files, so cache/synthesize use the
     // model stem instead of the user-facing voiceId.
     const engineVoiceId = isPiper ? getPiperModelStem() : voiceId;
-    const maxSpeed = getTtsMaxSpeed();
+    const baseSpeed = resolveTtsSpeed(remake.ttsSpeed);
+    const maxSpeed = resolveTtsMaxSpeed(remake.ttsMaxSpeed);
 
     const fitFailedIndexes: number[] = [];
     const timelineByIndex = new Map<
@@ -773,9 +781,11 @@ export class RemixProcessor extends WorkerHost {
     let ttsCostUsd = 0;
 
     const audioMode = getTtsAudioMode();
+    const timingMode = getTtsTimingMode();
+    const useSequential = timingMode === "sequential" && audioMode === "replace";
     // Hybrid only applies to full soundtrack replace — `mix` narration-only
     // dub always pins to the ZH window it ducks under.
-    const useHybrid = getTtsTimingMode() === "hybrid" && audioMode === "replace";
+    const useHybrid = timingMode === "hybrid" && audioMode === "replace";
     const hybridOptions = useHybrid
       ? {
           blockGapSec: getHybridBlockGapSec(),
@@ -829,21 +839,15 @@ export class RemixProcessor extends WorkerHost {
         )
       : null;
 
-    // Piper never mid-word ratio-splits: always smart-batch by sentence/gap.
-    // Live/fake keep the existing ratio batch (+ optional per_cue legacy mode).
-    const batchMode = isPiper ? "smart" : getTtsBatchMode();
-    const batches = isPiper
-      ? smartBatchCuesForTts(cues)
-      : batchMode === "per_cue"
-        ? cues
-            .filter((cue) => cue.text.trim().length > 0)
-            .map((cue) => ({
-              segmentIndexes: [cue.index],
-              cues: [cue],
-              text: cue.text.trim(),
-              totalWindowSec: Math.max(cue.endSec - cue.startSec, 0.1),
-            }))
-        : batchCuesForTts(cues);
+    // Piper: default per_cue (full sentence per synthesis). Smart-batch merges
+    // cues then ratio-splits MP3 — fast but cuts mid-phrase ("mất chữ").
+    const batchMode = isPiper ? getPiperTtsBatchMode() : getTtsBatchMode();
+    const batches =
+      isPiper && batchMode === "smart"
+        ? smartBatchCuesForTts(cues)
+        : batchMode === "per_cue"
+          ? perCueBatchesForTts(cues)
+          : batchCuesForTts(cues);
 
     // Batch TTS: few TTS calls, then cut audio back onto Phân đoạn windows.
     // Timeline positions always come from segment startSec/endSec (not from TTS pacing).
@@ -909,11 +913,18 @@ export class RemixProcessor extends WorkerHost {
         // Strict always pins to the ZH window and may shorten to fit it;
         // hybrid only shortens cues that stay lock-anchored to that window
         // (unlocked narration retimes instead of losing words to a shorten).
-        const isLocked = !useHybrid || hybridLockedIndexes!.has(segment.index);
+        const isLocked =
+          timingMode === "strict" ||
+          (useHybrid && hybridLockedIndexes!.has(segment.index));
+
+        let clipBuffer = synth.buffer;
+        let clipDuration = synth.durationSec;
+        ({ buffer: clipBuffer, durationSec: clipDuration } =
+          await applyBaseTtsSpeed(clipBuffer, clipDuration, baseSpeed));
 
         if (isLocked) {
           const plan = planSegmentFit({
-            audioDurationSec: synth.durationSec,
+            audioDurationSec: clipDuration,
             targetDurationSec,
             maxSpeed,
           });
@@ -929,13 +940,17 @@ export class RemixProcessor extends WorkerHost {
                 voiceId,
               });
               ttsCostUsd += synth.costUsd;
+              clipBuffer = synth.buffer;
+              clipDuration = synth.durationSec;
+              ({ buffer: clipBuffer, durationSec: clipDuration } =
+                await applyBaseTtsSpeed(clipBuffer, clipDuration, baseSpeed));
             }
           }
         }
 
         rawByIndex.set(segment.index, {
-          buffer: synth.buffer,
-          audioDurationSec: synth.durationSec,
+          buffer: clipBuffer,
+          audioDurationSec: clipDuration,
           zhStartSec: segment.startSec,
           zhEndSec: segment.endSec,
           role: effectiveRole(translated.segments[segment.index]!),
@@ -956,15 +971,32 @@ export class RemixProcessor extends WorkerHost {
           });
 
       for (const slice of slices) {
+        const adjusted = await applyBaseTtsSpeed(
+          slice.buffer,
+          slice.sliceDurationSec,
+          baseSpeed,
+        );
         rawByIndex.set(slice.index, {
-          buffer: slice.buffer,
-          audioDurationSec: slice.sliceDurationSec,
+          buffer: adjusted.buffer,
+          audioDurationSec: adjusted.durationSec,
           zhStartSec: slice.startSec,
           zhEndSec: slice.endSec,
           role: effectiveRole(translated.segments[slice.index]!),
         });
       }
     }
+
+    // Piper smart-batch splits allocate duration by text ratio — probe each
+    // clip so hybrid chaining and segment-fit use real MP3 length, not estimates.
+    await Promise.all(
+      [...rawByIndex.entries()].map(async ([index, raw]) => {
+        const audioDurationSec = await probeClipDurationSec(
+          raw.buffer,
+          raw.audioDurationSec,
+        );
+        rawByIndex.set(index, { ...raw, audioDurationSec });
+      }),
+    );
 
     const hybridOutByIndex = hybridOptions
       ? new Map(
@@ -987,25 +1019,89 @@ export class RemixProcessor extends WorkerHost {
       );
     }
 
-    for (const [index, raw] of rawByIndex) {
-      const planned = hybridOutByIndex?.get(index);
-      const startSec = planned?.startSec ?? raw.zhStartSec;
-      const fitTargetSec =
-        planned?.fitTargetSec ?? Math.max(raw.zhEndSec - raw.zhStartSec, 0.1);
-      const plan = planSegmentFit({
-        audioDurationSec: raw.audioDurationSec,
-        targetDurationSec: fitTargetSec,
-        maxSpeed,
-      });
-      const fitted = await applyFitToTarget(raw.buffer, plan, fitTargetSec);
-      if (fitted.truncated || plan.action === "shorten") {
-        fitFailedIndexes.push(index);
+    if (useSequential) {
+      const sequentialOut = planSequentialTimeline(
+        [...rawByIndex.entries()].map(([index, raw]) => ({
+          index,
+          zhStartSec: raw.zhStartSec,
+          audioDurationSec: raw.audioDurationSec,
+        })),
+      );
+
+      this.logger.log(
+        `remix_tts ${jobId}: sequential timeline planned for ${sequentialOut.length} cues`,
+      );
+
+      for (const entry of sequentialOut) {
+        const raw = rawByIndex.get(entry.index)!;
+        timelineByIndex.set(entry.index, {
+          startSec: entry.startSec,
+          endSec: entry.endSec,
+          fittedMp3Buffer: raw.buffer,
+        });
       }
-      timelineByIndex.set(index, {
-        startSec,
-        endSec: planned?.endSec ?? startSec + fitTargetSec,
-        fittedMp3Buffer: fitted.buffer,
-      });
+    } else {
+      for (const [index, raw] of rawByIndex) {
+        const planned = hybridOutByIndex?.get(index);
+        const startSec = planned?.startSec ?? raw.zhStartSec;
+        const fitTargetSec =
+          planned?.fitTargetSec ?? Math.max(raw.zhEndSec - raw.zhStartSec, 0.1);
+        const plan = planSegmentFit({
+          audioDurationSec: raw.audioDurationSec,
+          targetDurationSec: fitTargetSec,
+          maxSpeed,
+        });
+        const fitted = await applyFitToTarget(raw.buffer, plan, fitTargetSec);
+        if (fitted.truncated || plan.action === "shorten") {
+          fitFailedIndexes.push(index);
+        }
+        timelineByIndex.set(index, {
+          startSec,
+          endSec: planned?.endSec ?? startSec + fitTargetSec,
+          fittedMp3Buffer: fitted.buffer,
+        });
+      }
+
+      if (audioMode === "replace") {
+        const finalized = await finalizeDubTimeline(
+          [...timelineByIndex.entries()].map(([index, entry]) => {
+            const planned = hybridOutByIndex?.get(index);
+            const raw = rawByIndex.get(index);
+            return {
+              index,
+              plannedStartSec: entry.startSec,
+              fitTargetSec:
+                planned?.fitTargetSec ??
+                Math.max(
+                  (raw?.zhEndSec ?? entry.endSec) -
+                    (raw?.zhStartSec ?? entry.startSec),
+                  0.1,
+                ),
+              locked: planned?.locked ?? !useHybrid,
+              buffer: entry.fittedMp3Buffer,
+            };
+          }),
+        );
+
+        let deferredCount = 0;
+        for (const entry of finalized) {
+          if (entry.deferred) deferredCount += 1;
+          if (entry.truncated && !fitFailedIndexes.includes(entry.index)) {
+            fitFailedIndexes.push(entry.index);
+          }
+          timelineByIndex.set(entry.index, {
+            startSec: entry.startSec,
+            endSec: entry.endSec,
+            fittedMp3Buffer: entry.buffer,
+          });
+        }
+
+        if (deferredCount > 0) {
+          this.logger.log(
+            `remix_tts ${jobId}: deferred ${deferredCount} cues to prevent overlap`,
+          );
+        }
+      }
     }
 
     // Empty-text cues are omitted; assemble fills gaps with silence between clips.
@@ -1017,8 +1113,16 @@ export class RemixProcessor extends WorkerHost {
       );
 
     const lastSegment = translated.segments[translated.segments.length - 1];
-    const totalDurationSec =
-      remake.videoDurationSec ?? lastSegment?.endSec ?? translated.durationSec;
+    const placedEndSec =
+      timelineSegments.length > 0
+        ? Math.max(...timelineSegments.map((segment) => segment.endSec))
+        : 0;
+    const totalDurationSec = Math.max(
+      remake.videoDurationSec ?? 0,
+      lastSegment?.endSec ?? 0,
+      translated.durationSec,
+      placedEndSec,
+    );
 
     const dubBuffer = await assembleDubTimeline({
       segments: timelineSegments,

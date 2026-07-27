@@ -1,6 +1,12 @@
-import { IsIn, IsObject, IsOptional, IsString } from "class-validator";
+import { IsIn, IsNumber, IsObject, IsOptional, IsString, Max, Min, ValidateIf } from "class-validator";
 import { REMIX_RENDER_MODES } from "@factory/shared";
 import type { RemixBannerJson, RemixPackageV1, RemixRenderMode } from "@factory/shared";
+import {
+  TTS_MAX_SPEED_MAX,
+  TTS_MAX_SPEED_MIN,
+  TTS_SPEED_MAX,
+  TTS_SPEED_MIN,
+} from "../remix-config";
 
 export class UpdateRemixDto {
   @IsOptional()
@@ -18,6 +24,19 @@ export class UpdateRemixDto {
   @IsOptional()
   @IsString()
   ttsVoiceId?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(TTS_SPEED_MIN)
+  @Max(TTS_SPEED_MAX)
+  ttsSpeed?: number;
+
+  @IsOptional()
+  @ValidateIf((_o, value) => value != null)
+  @IsNumber()
+  @Min(TTS_MAX_SPEED_MIN)
+  @Max(TTS_MAX_SPEED_MAX)
+  ttsMaxSpeed?: number | null;
 
   @IsOptional()
   @IsObject()

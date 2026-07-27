@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runFfmpeg } from "../remix-audio.util";
+import { probeAudioDurationSec, runFfmpeg } from "../remix-audio.util";
 
 export type SegmentFitPlan = {
   action: "pad" | "speed" | "shorten" | "ok";
@@ -131,6 +131,20 @@ export const applyTempo = async (buffer: Buffer, speed: number): Promise<Buffer>
   }
 };
 
+/** User-facing base speaking rate (applied before timeline fit). */
+export const applyBaseTtsSpeed = async (
+  buffer: Buffer,
+  durationSec: number,
+  baseSpeed: number,
+): Promise<{ buffer: Buffer; durationSec: number }> => {
+  if (Math.abs(baseSpeed - 1) < 0.001) {
+    return { buffer, durationSec };
+  }
+
+  const adjustedBuffer = await applyTempo(buffer, baseSpeed);
+  return { buffer: adjustedBuffer, durationSec: durationSec / baseSpeed };
+};
+
 /**
  * Hard-cut audio to `durationSec` so a clip that still overruns after max
  * atempo cannot spill into the next cue window (adelay + amix would sum voices).
@@ -175,30 +189,58 @@ export type FitToTargetResult = {
   truncated: boolean;
 };
 
+const enforceMaxClipDuration = async (
+  buffer: Buffer,
+  maxDurationSec: number,
+): Promise<FitToTargetResult> => {
+  if (isFakeTtsMode()) {
+    return { buffer, truncated: false };
+  }
+
+  const actualSec = await probeAudioDurationSec(buffer, "mp3");
+  if (
+    actualSec == null ||
+    actualSec <= maxDurationSec + DURATION_EPSILON_SEC
+  ) {
+    return { buffer, truncated: false };
+  }
+
+  return {
+    buffer: await applyTruncate(buffer, maxDurationSec),
+    truncated: true,
+  };
+};
+
 /**
  * Apply pad/tempo/shorten for a cue window. On `shorten`, tempo to maxSpeed
  * then hard-truncate to `targetDurationSec` so the clip cannot overrun.
+ * Always probes the fitted buffer and truncates if it still exceeds the window
+ * (guards against underestimated slice durations in smart-batch Piper splits).
  */
 export const applyFitToTarget = async (
   buffer: Buffer,
   plan: SegmentFitPlan,
   targetDurationSec: number,
 ): Promise<FitToTargetResult> => {
+  let result: FitToTargetResult;
+
   if (plan.action === "pad" && plan.padSec) {
-    return { buffer: await applyPad(buffer, plan.padSec), truncated: false };
-  }
-
-  if (plan.action === "speed") {
-    return { buffer: await applyTempo(buffer, plan.speed), truncated: false };
-  }
-
-  if (plan.action === "shorten") {
+    result = { buffer: await applyPad(buffer, plan.padSec), truncated: false };
+  } else if (plan.action === "speed") {
+    result = { buffer: await applyTempo(buffer, plan.speed), truncated: false };
+  } else if (plan.action === "shorten") {
     const sped = await applyTempo(buffer, plan.speed);
-    return {
+    result = {
       buffer: await applyTruncate(sped, targetDurationSec),
       truncated: true,
     };
+  } else {
+    result = { buffer, truncated: false };
   }
 
-  return { buffer, truncated: false };
+  const enforced = await enforceMaxClipDuration(result.buffer, targetDurationSec);
+  return {
+    buffer: enforced.buffer,
+    truncated: result.truncated || enforced.truncated,
+  };
 };

@@ -4,17 +4,19 @@
   "version": "0.0.0",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "echo \"TODO: start api + web\"",
+    "dev": "concurrently -n WEB,API,WORKER,REDIS,MINIO -c blue,green,yellow,magenta,cyan \"pnpm dev:web\" \"pnpm dev:api\" \"pnpm dev:worker\" \"pnpm dev:redis\" \"pnpm dev:minio\"",
     "dev:api": "pnpm --filter api start:api",
     "dev:web": "pnpm --filter web dev",
     "dev:worker": "pnpm --filter api start:worker",
     "dev:redis": "powershell -ExecutionPolicy Bypass -File scripts/start-redis.ps1",
+    "dev:minio": "powershell -ExecutionPolicy Bypass -File scripts/start-minio.ps1",
     "clean:fake-viral": "node scripts/clean-fake-viral-data.js",
     "build": "echo \"TODO: build workspace\"",
     "test": "echo \"TODO: run tests\"",
     "lint": "echo \"TODO: lint workspace\""
   },
   "devDependencies": {
+    "concurrently": "^10.0.4",
     "prisma": "^6.19.3"
   },
   "dependencies": {

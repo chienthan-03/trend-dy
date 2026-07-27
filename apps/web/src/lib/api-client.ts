@@ -158,6 +158,8 @@ export type ViralRemake = {
   renderOutputKey: string | null;
   bannerJson: RemixBannerJson | null;
   ttsVoiceId: string | null;
+  ttsSpeed: number;
+  ttsMaxSpeed: number | null;
   ttsEngine?: "piper" | "live" | null;
   ttsFitFailedIndexes: number[];
   classifyWarning?: string | null;
@@ -413,6 +415,8 @@ export const api = {
         editorNotes?: string;
         renderMode?: RemixRenderMode;
         ttsVoiceId?: string;
+        ttsSpeed?: number;
+        ttsMaxSpeed?: number | null;
         bannerJson?: RemixBannerJson;
       },
     ) =>

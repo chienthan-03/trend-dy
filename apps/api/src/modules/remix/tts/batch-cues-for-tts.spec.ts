@@ -1,7 +1,9 @@
 import { describe, expect, it, afterEach, beforeEach } from "vitest";
 import {
   batchCuesForTts,
+  getPiperTtsBatchMode,
   getTtsBatchMode,
+  perCueBatchesForTts,
   type CueForBatch,
 } from "./batch-cues-for-tts";
 
@@ -26,6 +28,22 @@ describe("batchCuesForTts", () => {
   it("defaults to batch mode", () => {
     delete process.env.REMIX_TTS_BATCH_MODE;
     expect(getTtsBatchMode()).toBe("batch");
+  });
+
+  it("defaults Piper to per_cue batch mode", () => {
+    delete process.env.REMIX_PIPER_TTS_BATCH_MODE;
+    expect(getPiperTtsBatchMode()).toBe("per_cue");
+  });
+
+  it("perCueBatchesForTts returns one batch per cue", () => {
+    const batches = perCueBatchesForTts([
+      cue(0, 0, 2, "Một."),
+      cue(1, 2, 4, "Hai."),
+    ]);
+
+    expect(batches).toHaveLength(2);
+    expect(batches[0]!.text).toBe("Một.");
+    expect(batches[1]!.segmentIndexes).toEqual([1]);
   });
 
   it("merges adjacent short cues under duration/char caps", () => {

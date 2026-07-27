@@ -24,7 +24,7 @@ if (-not $minio) {
 $env:MINIO_ROOT_USER = "minio"
 $env:MINIO_ROOT_PASSWORD = "minio12345"
 
-Write-Host "MinIO API : http://127.0.0.1:9000"
-Write-Host "MinIO UI  : http://127.0.0.1:9001  (login minio / minio12345)"
+Write-Host "MinIO API : http://127.0.0.1:19000"
+Write-Host "MinIO UI  : http://127.0.0.1:19001  (login minio / minio12345)"
 Write-Host "Create bucket: factory"
-& "$minioExe" server $DataDir --console-address ":9001"
+& "$minioExe" server $DataDir --address ":19000" --console-address ":19001"
