@@ -1013,6 +1013,57 @@ describe("RemixProcessor (Full Script Mode)", () => {
     expect(segs[2]!.startSec).toBeGreaterThanOrEqual(4.15);
   });
 
+  it("handleTts sequential defers next cue when probed audio exceeds estimate", async () => {
+    process.env.REMIX_TTS_MODE = "fake";
+    process.env.REMIX_TTS_AUDIO_MODE = "replace";
+    process.env.REMIX_TTS_TIMING_MODE = "sequential";
+    process.env.REMIX_TTS_BATCH_MODE = "per_cue";
+
+    probeClipDurationSecMock.mockImplementation(async (_buffer, fallbackSec) => {
+      if (Math.abs(fallbackSec - 2) < 0.01) {
+        return 3.5;
+      }
+      return fallbackSec;
+    });
+
+    const assembleSpy = vi.spyOn(assembleDub, "assembleDubTimeline");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsEngine: null,
+      videoDurationSec: 10,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 10,
+        segments: [
+          { startSec: 0, endSec: 1, text: "Hi", role: "narration", roleSource: "manual" },
+          {
+            startSec: 1,
+            endSec: 3,
+            text: "B".repeat(40),
+            role: "narration",
+            roleSource: "manual",
+          },
+          { startSec: 2, endSec: 4, text: "End", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "…",
+      },
+    });
+
+    await processor.process({
+      id: "job_sequential_overlap",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as never);
+
+    const segs = assembleSpy.mock.calls[0]![0].segments as Array<{ startSec: number }>;
+    expect(segs[2]!.startSec).toBeGreaterThanOrEqual(4.45);
+  });
+
   it("handleTts strict keeps ZH startSec for narration", async () => {
     process.env.REMIX_TTS_MODE = "fake";
     process.env.REMIX_TTS_AUDIO_MODE = "replace";

@@ -101,9 +101,9 @@ describe("remix-config", () => {
     expect(getDefaultTtsSpeed()).toBe(1.1);
   });
 
-  it("clamps resolveTtsSpeed to 0.75–1.25", () => {
+  it("clamps resolveTtsSpeed to 0.75–1.5", () => {
     expect(resolveTtsSpeed(0.5)).toBe(0.75);
-    expect(resolveTtsSpeed(2)).toBe(1.25);
+    expect(resolveTtsSpeed(2)).toBe(1.5);
     expect(resolveTtsSpeed(1)).toBe(1);
     expect(resolveTtsSpeed(null)).toBe(1);
   });

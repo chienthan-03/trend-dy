@@ -1019,27 +1019,76 @@ export class RemixProcessor extends WorkerHost {
       );
     }
 
+    // Sequential still chains cues globally, but each clip is fitted to its ZH
+    // window first so ttsSpeed + ttsMaxSpeed can keep pace with the video.
+    if (useSequential) {
+      for (const [index, raw] of rawByIndex) {
+        const fitTargetSec = Math.max(raw.zhEndSec - raw.zhStartSec, 0.1);
+        const plan = planSegmentFit({
+          audioDurationSec: raw.audioDurationSec,
+          targetDurationSec: fitTargetSec,
+          maxSpeed,
+        });
+        const fitted = await applyFitToTarget(raw.buffer, plan, fitTargetSec);
+        if (fitted.truncated || plan.action === "shorten") {
+          fitFailedIndexes.push(index);
+        }
+        const fittedDurationSec = await probeClipDurationSec(
+          fitted.buffer,
+          fitTargetSec,
+        );
+        rawByIndex.set(index, {
+          ...raw,
+          buffer: fitted.buffer,
+          audioDurationSec: fittedDurationSec,
+        });
+      }
+    }
+
     if (useSequential) {
       const sequentialOut = planSequentialTimeline(
         [...rawByIndex.entries()].map(([index, raw]) => ({
           index,
           zhStartSec: raw.zhStartSec,
+          zhEndSec: raw.zhEndSec,
           audioDurationSec: raw.audioDurationSec,
         })),
+        { blockGapSec: getHybridBlockGapSec() },
       );
 
-      this.logger.log(
-        `remix_tts ${jobId}: sequential timeline planned for ${sequentialOut.length} cues`,
+      const finalized = await finalizeDubTimeline(
+        sequentialOut.map((entry) => {
+          const raw = rawByIndex.get(entry.index)!;
+          return {
+            index: entry.index,
+            plannedStartSec: entry.startSec,
+            fitTargetSec: raw.audioDurationSec,
+            locked: false,
+            buffer: raw.buffer,
+          };
+        }),
       );
 
-      for (const entry of sequentialOut) {
+      let deferredCount = 0;
+      for (const entry of finalized) {
         const raw = rawByIndex.get(entry.index)!;
+        if (entry.deferred || entry.startSec > raw.zhStartSec + 0.1) {
+          deferredCount += 1;
+        }
+        if (entry.truncated && !fitFailedIndexes.includes(entry.index)) {
+          fitFailedIndexes.push(entry.index);
+        }
         timelineByIndex.set(entry.index, {
           startSec: entry.startSec,
           endSec: entry.endSec,
-          fittedMp3Buffer: raw.buffer,
+          fittedMp3Buffer: entry.buffer,
         });
       }
+
+      this.logger.log(
+        `remix_tts ${jobId}: sequential timeline planned for ${sequentialOut.length} cues` +
+          (deferredCount > 0 ? ` (${deferredCount} deferred to prevent overlap)` : ""),
+      );
     } else {
       for (const [index, raw] of rawByIndex) {
         const planned = hybridOutByIndex?.get(index);

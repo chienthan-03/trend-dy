@@ -3,6 +3,7 @@ const EPS_SEC = 0.05;
 export type SequentialCueIn = {
   index: number;
   zhStartSec: number;
+  zhEndSec: number;
   audioDurationSec: number;
 };
 
@@ -12,13 +13,19 @@ export type SequentialCueOut = {
   endSec: number;
 };
 
+export type SequentialTimelineOptions = {
+  /** Reserved for future block-aware policies; placement always chains globally. */
+  blockGapSec: number;
+};
+
 /**
- * Place cues one after another at natural TTS duration — no speed-up,
- * no truncate. Each cue starts when the previous finishes (never earlier
- * than its ZH `startSec` so block gaps stay silent).
+ * Place cues one after another at fitted clip duration. Each cue starts when the
+ * previous one finishes (never earlier than its ZH `startSec`). Clips are fitted
+ * to their ZH windows upstream before this planner runs.
  */
 export const planSequentialTimeline = (
   cues: SequentialCueIn[],
+  _options: SequentialTimelineOptions,
 ): SequentialCueOut[] => {
   const sorted = [...cues].sort((a, b) => a.index - b.index);
   let cursorSec = 0;

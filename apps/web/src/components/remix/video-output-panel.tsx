@@ -36,12 +36,19 @@ const TTS_SPEED_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 0.85, label: "Chậm (0.85×)" },
   { value: 1, label: "Bình thường (1.0×)" },
   { value: 1.15, label: "Nhanh (1.15×)" },
+  { value: 1.25, label: "Khá nhanh (1.25×)" },
+  { value: 1.35, label: "Nhanh hơn (1.35×)" },
+  { value: 1.45, label: "Cực nhanh (1.45×)" },
+  { value: 1.5, label: "Rất nhanh (1.5×)" },
 ];
 
 const TTS_MAX_SPEED_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "server", label: "Theo server" },
   { value: "1", label: "1.0×" },
+  { value: "1.15", label: "1.15×" },
   { value: "1.25", label: "1.25×" },
+  { value: "1.35", label: "1.35×" },
+  { value: "1.45", label: "1.45×" },
   { value: "1.5", label: "1.5×" },
 ];
 
@@ -496,6 +503,10 @@ export const VideoOutputPanel = ({
               </option>
             ))}
           </Select>
+          <p className="text-xs text-gray-500">
+            Hệ số trên giọng TTS gốc. Nếu vẫn chậm hơn video, tăng «Khớp timeline tối
+            đa» (ví dụ 1.5×).
+          </p>
         </div>
 
         <div className="grid gap-1 sm:max-w-xs">
@@ -514,7 +525,8 @@ export const VideoOutputPanel = ({
             ))}
           </Select>
           <p className="text-xs text-gray-500">
-            Cần bấm «Tạo audio VI» lại sau khi đổi tốc độ.
+            Tăng tốc thêm khi câu dài hơn khung phụ đề. Cần bấm «Tạo audio VI» lại sau
+            khi đổi.
           </p>
         </div>
       </fieldset>

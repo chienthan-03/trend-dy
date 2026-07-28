@@ -55,7 +55,7 @@ export const getTtsMaxSpeed = (): number => {
 };
 
 export const TTS_SPEED_MIN = 0.75;
-export const TTS_SPEED_MAX = 1.25;
+export const TTS_SPEED_MAX = 1.5;
 export const TTS_MAX_SPEED_MIN = 1;
 export const TTS_MAX_SPEED_MAX = 2;
 

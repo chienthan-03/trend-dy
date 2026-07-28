@@ -94,4 +94,32 @@ describe("finalizeDubTimeline", () => {
     expect(out[0]!.startSec).toBe(5);
     expect(out[0]!.deferred).toBe(false);
   });
+
+  it("chains sequential cues without overlap when probed duration exceeds estimate", async () => {
+    probeClipDurationSecMock
+      .mockResolvedValueOnce(3.2)
+      .mockResolvedValueOnce(2.1)
+      .mockResolvedValueOnce(3.2)
+      .mockResolvedValueOnce(2.1);
+
+    const out = await finalizeDubTimeline([
+      {
+        index: 0,
+        plannedStartSec: 0,
+        fitTargetSec: 3,
+        locked: false,
+        buffer: Buffer.from("a"),
+      },
+      {
+        index: 1,
+        plannedStartSec: 3,
+        fitTargetSec: 2,
+        locked: false,
+        buffer: Buffer.from("b"),
+      },
+    ]);
+
+    expect(out[0]!.startSec).toBe(0);
+    expect(out[1]!.startSec).toBeGreaterThanOrEqual(out[0]!.endSec - 0.02);
+  });
 });
