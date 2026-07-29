@@ -49,11 +49,12 @@ Editors want a **“đủ dùng”** result: VI narration with ducked original b
 | Quality bar | “Đủ dùng” — original under TTS via duck; source voice may leak |
 | Persistence | `ViralRemake.ttsAudioMode` nullable string: `replace` \| `mix` \| null |
 | Null meaning | Resolve as `getTtsAudioMode()` from env at TTS/render time |
-| New remake default | Copy env default into row on create **or** leave null (same effective behavior). Prefer **leave null** so ops can flip env without backfilling. |
-| UI default display | Show resolved effective mode (persisted ?? env) |
-| Mode change invalidation | Clear `mediaDubAudioKey`, `renderOutputKey`; `renderPhase=idle`; clear fit indexes / timing warning as existing TTS invalidation paths do |
+| New remake default | Leave **null** so ops can flip env without backfilling rows |
+| UI radio PATCH | Always persist explicit `"replace"` \| `"mix"` (never write null from radios). Null remains API/ops-only “follow env.” |
+| UI default display | Show resolved effective mode (persisted ?? env) via `effectiveTtsAudioMode` on remake DTO |
+| Mode change invalidation | Reuse existing `invalidateDubAndRenderData` (same as role toggle): clears dub + render + `dubSource` as that helper already does |
 | Upload dub | Ignore `ttsAudioMode`; always full replace |
-| Duck gain | Env only (`REMIX_DUCK_GAIN`, default 0.2) |
+| Duck gain | Env only (`REMIX_DUCK_GAIN`). Do **not** change code default in this work — today `getDuckGain()` defaults to `0`; operators set `0.2` in `.env` for “đủ dùng.” |
 | Hybrid timing | Unchanged: hybrid only when effective mode is `replace` |
 
 ---
@@ -124,29 +125,31 @@ One-line reminder near role badges when effective mode is `mix`: “Mix: chỉ �
 
 ## 7. Invalidation matrix
 
-| Action | Clears dub | Clears render | `renderPhase` |
-|---|---|---|---|
-| PATCH `ttsAudioMode` (value changes) | Yes | Yes | `idle` |
-| Role toggle / re-classify (existing) | Yes | Yes | `idle` |
-| PATCH banner / renderMode only | No (existing) | Yes → `tts_ready` if dub exists | as today |
+| Action | Behavior |
+|---|---|
+| PATCH `ttsAudioMode` when value **changes** | Spread `invalidateDubAndRenderData` (same helper as role toggle) |
+| Role toggle / re-classify | Unchanged (existing helper) |
+| PATCH banner / `renderMode` only | Unchanged (render-only wipe → `tts_ready` if dub exists) |
+| PATCH `ttsAudioMode` to same value | No-op invalidation |
 
 ---
 
 ## 8. Config / docs
 
-`.env.example`:
+`.env.example` — keep sample default **`replace`** (current); document mix as the music-bed option:
 
 ```env
-# replace = full VI soundtrack; mix = keep original under narration (duck)
-REMIX_TTS_AUDIO_MODE=mix
-REMIX_DUCK_GAIN=0.2
+# replace (default) = full VI soundtrack; mix = keep original under narration (duck)
+REMIX_TTS_AUDIO_MODE=replace
+# Linear gain for original under TTS narration windows when mode=mix (code default 0)
+# REMIX_DUCK_GAIN=0.2
 ```
 
-Operator note: Studio can override per remake; env is default when remake field is null.
+Local “đủ dùng” ops tip (not a code default change): set `REMIX_TTS_AUDIO_MODE=mix` and `REMIX_DUCK_GAIN=0.2` in `.env`, or pick mix in Studio.
 
 Usage (smoke):
 
-1. Set env `mix` (or pick mix in UI)
+1. Pick **Giữ nhạc nền (mix)** in UI (or set env `mix` with null remake field)
 2. Classify Review / Giữ gốc
 3. Tạo audio VI → Render preview
 4. Expect: music under VI on Review windows; full original on Giữ gốc
