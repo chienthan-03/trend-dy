@@ -96,6 +96,9 @@ export type RemixSubtitlesV2 = RemixPackageV1["subtitles"] & {
 export const REMIX_RENDER_MODES = ["audio_only", "banner_audio"] as const;
 export type RemixRenderMode = (typeof REMIX_RENDER_MODES)[number];
 
+export const REMIX_TTS_AUDIO_MODES = ["replace", "mix"] as const;
+export type RemixTtsAudioMode = (typeof REMIX_TTS_AUDIO_MODES)[number];
+
 export const REMIX_RENDER_PHASES = [
   "idle",
   "tts",

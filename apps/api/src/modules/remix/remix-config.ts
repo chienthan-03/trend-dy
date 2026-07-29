@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ServiceUnavailableException } from "@nestjs/common";
-import type { RemixScriptMode } from "@factory/shared";
+import type { RemixScriptMode, RemixTtsAudioMode } from "@factory/shared";
 
 export const getRemixScriptMode = (): RemixScriptMode => {
   const raw = process.env.REMIX_SCRIPT_MODE?.trim().toLowerCase();
@@ -50,8 +50,8 @@ export const getSttAudioBitrateKbps = (): number => {
 };
 
 export const getTtsMaxSpeed = (): number => {
-  const n = Number(process.env.REMIX_TTS_MAX_SPEED ?? "1.25");
-  return Number.isFinite(n) && n > 0 ? n : 1.25;
+  const n = Number(process.env.REMIX_TTS_MAX_SPEED ?? "1.5");
+  return Number.isFinite(n) && n > 0 ? n : 1.5;
 };
 
 export const TTS_SPEED_MIN = 0.75;
@@ -82,16 +82,37 @@ export const resolveTtsMaxSpeed = (remakeMaxSpeed?: number | null): number => {
 };
 
 /**
+ * Cap for per-cue timeline squeeze after `applyBaseTtsSpeed`. Never below the
+ * user's base speaking rate so a high `ttsSpeed` is not undercut by a lower
+ * server `ttsMaxSpeed` default (which would truncate instead of speeding up).
+ */
+export const resolveEffectiveTtsMaxSpeed = (
+  remakeSpeed?: number | null,
+  remakeMaxSpeed?: number | null,
+): number => {
+  const baseSpeed = resolveTtsSpeed(remakeSpeed);
+  const configuredMax = resolveTtsMaxSpeed(remakeMaxSpeed);
+  return Math.max(configuredMax, baseSpeed);
+};
+
+/**
  * How TTS dub is mixed into the final render:
  * - `replace` (default): TTS every cue; full soundtrack replace (continuous VI).
  * - `mix`: TTS narration only; duck original under narration (Review / Giữ gốc).
  */
-export type TtsAudioMode = "replace" | "mix";
+export type TtsAudioMode = RemixTtsAudioMode;
 
 export const getTtsAudioMode = (): TtsAudioMode => {
   const raw = process.env.REMIX_TTS_AUDIO_MODE?.trim().toLowerCase();
   if (raw === "mix") return "mix";
   return "replace";
+};
+
+export const resolveEffectiveTtsAudioMode = (
+  persisted: string | null | undefined,
+): RemixTtsAudioMode => {
+  if (persisted === "mix" || persisted === "replace") return persisted;
+  return getTtsAudioMode();
 };
 
 export type TtsTimingMode = "sequential" | "hybrid" | "strict";
@@ -221,16 +242,33 @@ export const getTtsModel = (): string => {
 };
 
 export const getTtsCostPer1kCharsUsd = (): number => {
-  const configured = Number(process.env.REMIX_TTS_COST_PER_1K_CHARS_USD);
-  if (Number.isFinite(configured) && configured >= 0) return configured;
-
-  // Grok Voice on OpenRouter bills ~$0.058–0.06 / 1k prompt chars (not $0.015).
   const model = getTtsModel().toLowerCase();
-  if (model.includes("grok-voice") || model.includes("grok")) {
-    return 0.06;
-  }
-  return 0.015;
+  const inferred = (() => {
+    if (model.includes("grok-voice") || model.includes("grok")) {
+      return 0.06;
+    }
+    if (model.includes("gemini") && model.includes("tts")) {
+      return 0.001;
+    }
+    if (model.includes("kokoro")) {
+      return 0.0004;
+    }
+    return 0.015;
+  })();
+
+  const raw = process.env.REMIX_TTS_COST_PER_1K_CHARS_USD?.trim();
+  if (!raw) return inferred;
+
+  const configured = Number(raw);
+  if (!Number.isFinite(configured) || configured < 0) return inferred;
+  return configured;
 };
+
+/** Remix generate / classify / banners LLM (not translate). */
+export const getRemixLlmModel = (): string =>
+  process.env.REMIX_LLM_MODEL?.trim() ||
+  process.env.LLM_MODEL?.trim() ||
+  "openai/gpt-4o-mini";
 
 export const getDefaultTtsVoiceId = (): string => {
   const configured = process.env.REMIX_TTS_VOICE?.trim();
@@ -302,6 +340,12 @@ export const getDubMaxUploadMb = (): number => {
 export const getSttModel = (): string =>
   process.env.REMIX_STT_MODEL?.trim() || "openai/whisper-large-v3-turbo";
 
+/** ISO-639-1 hint for Whisper (e.g. zh for Douyin). Empty = auto-detect. */
+export const getSttLanguageHint = (): string | undefined => {
+  const raw = process.env.REMIX_STT_LANGUAGE?.trim().toLowerCase();
+  return raw || undefined;
+};
+
 /** Duration-based STT pricing (USD per minute). Turbo ≈ $0.04/hr on OpenRouter/Groq. */
 export const getSttCostPerMinuteUsd = (): number => {
   const configured = Number(process.env.REMIX_STT_COST_PER_MINUTE_USD);
@@ -312,6 +356,9 @@ export const getSttCostPerMinuteUsd = (): number => {
   const model = getSttModel().toLowerCase();
   if (model.includes("whisper-large-v3-turbo") || model.includes("distil-whisper")) {
     return 0.04 / 60;
+  }
+  if (model.includes("whisper-large-v3")) {
+    return 0.111 / 60;
   }
   if (model.includes("gpt-4o-mini-transcribe")) {
     return 0.003;

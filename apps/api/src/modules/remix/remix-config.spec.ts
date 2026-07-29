@@ -13,6 +13,7 @@ import {
   getSmartBatchMaxDurationSec,
   getSmartBatchMaxGapSec,
   getSttCostPerMinuteUsd,
+  getSttLanguageHint,
   getSttModel,
   getSttResponseFormat,
   getDefaultTtsSpeed,
@@ -20,6 +21,7 @@ import {
   resolveTtsMaxSpeed,
   resolveTtsSpeed,
   getTtsAudioMode,
+  resolveEffectiveTtsAudioMode,
   getTtsTimingMode,
   getTtsMode,
   resolveTtsEngine,
@@ -81,9 +83,22 @@ describe("remix-config", () => {
     expect(getSttCostPerMinuteUsd()).toBeCloseTo(0.04 / 60);
   });
 
-  it("defaults TTS max speed to 1.25", () => {
+  it("infers large-v3 STT cost from model name", () => {
+    process.env.REMIX_STT_MODEL = "openai/whisper-large-v3";
+    delete process.env.REMIX_STT_COST_PER_MINUTE_USD;
+    expect(getSttCostPerMinuteUsd()).toBeCloseTo(0.111 / 60);
+  });
+
+  it("reads STT language hint from env", () => {
+    delete process.env.REMIX_STT_LANGUAGE;
+    expect(getSttLanguageHint()).toBeUndefined();
+    process.env.REMIX_STT_LANGUAGE = "zh";
+    expect(getSttLanguageHint()).toBe("zh");
+  });
+
+  it("defaults TTS max speed to 1.5", () => {
     delete process.env.REMIX_TTS_MAX_SPEED;
-    expect(getTtsMaxSpeed()).toBe(1.25);
+    expect(getTtsMaxSpeed()).toBe(1.5);
   });
 
   it("reads TTS max speed from env", () => {
@@ -109,15 +124,23 @@ describe("remix-config", () => {
   });
 
   it("resolveTtsMaxSpeed prefers remake override over env", () => {
-    process.env.REMIX_TTS_MAX_SPEED = "1.25";
+    process.env.REMIX_TTS_MAX_SPEED = "1.5";
     expect(resolveTtsMaxSpeed(1.5)).toBe(1.5);
-    expect(resolveTtsMaxSpeed(null)).toBe(1.25);
-    expect(resolveTtsMaxSpeed(undefined)).toBe(1.25);
+    expect(resolveTtsMaxSpeed(null)).toBe(1.5);
+    expect(resolveTtsMaxSpeed(undefined)).toBe(1.5);
   });
 
   it("clamps resolveTtsMaxSpeed to 1–2", () => {
     expect(resolveTtsMaxSpeed(0.5)).toBe(1);
     expect(resolveTtsMaxSpeed(3)).toBe(2);
+  });
+
+  it("resolveEffectiveTtsMaxSpeed never goes below base ttsSpeed", async () => {
+    const { resolveEffectiveTtsMaxSpeed } = await import("./remix-config");
+    process.env.REMIX_TTS_MAX_SPEED = "1.25";
+    expect(resolveEffectiveTtsMaxSpeed(1.45, null)).toBe(1.45);
+    expect(resolveEffectiveTtsMaxSpeed(1.15, 1.5)).toBe(1.5);
+    expect(resolveEffectiveTtsMaxSpeed(1, null)).toBe(1.25);
   });
 
   it("defaults OpenRouter TTS model to Grok Voice", async () => {
@@ -180,6 +203,28 @@ describe("remix-config", () => {
   it("treats unknown TTS audio mode values as replace", () => {
     process.env.REMIX_TTS_AUDIO_MODE = "weird";
     expect(getTtsAudioMode()).toBe("replace");
+  });
+
+  describe("resolveEffectiveTtsAudioMode", () => {
+    it("returns replace when persisted is replace", () => {
+      process.env.REMIX_TTS_AUDIO_MODE = "mix";
+      expect(resolveEffectiveTtsAudioMode("replace")).toBe("replace");
+    });
+
+    it("returns mix when persisted is mix", () => {
+      process.env.REMIX_TTS_AUDIO_MODE = "replace";
+      expect(resolveEffectiveTtsAudioMode("mix")).toBe("mix");
+    });
+
+    it("falls back to env when persisted is null", () => {
+      process.env.REMIX_TTS_AUDIO_MODE = "mix";
+      expect(resolveEffectiveTtsAudioMode(null)).toBe("mix");
+    });
+
+    it("falls back to env replace when persisted is garbage", () => {
+      process.env.REMIX_TTS_AUDIO_MODE = "replace";
+      expect(resolveEffectiveTtsAudioMode("weird")).toBe("replace");
+    });
   });
 
   it("defaults TTS timing mode to sequential", () => {
