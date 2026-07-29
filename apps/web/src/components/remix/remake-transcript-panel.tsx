@@ -38,6 +38,7 @@ interface RemakeTranscriptPanelProps {
   timingWarning?: string | null;
   onRetranscribe?: () => void;
   retranscribePending?: boolean;
+  effectiveTtsAudioMode?: "replace" | "mix";
 }
 
 export const RemakeTranscriptPanel = ({
@@ -56,6 +57,7 @@ export const RemakeTranscriptPanel = ({
   timingWarning,
   onRetranscribe,
   retranscribePending = false,
+  effectiveTtsAudioMode,
 }: RemakeTranscriptPanelProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [view, setView] = useState<TranscriptView>("source");
@@ -192,6 +194,11 @@ export const RemakeTranscriptPanel = ({
 
             {view === "translated" && translatedTranscript ? (
               <div className="space-y-2">
+                {effectiveTtsAudioMode === "mix" ? (
+                  <p className="text-xs text-gray-500">
+                    Mix: chỉ đọc dòng Review; Giữ gốc giữ tiếng gốc + nhạc.
+                  </p>
+                ) : null}
                 <p className="text-xs text-gray-500">
                   <strong>Review</strong> / <strong>Giữ gốc</strong> là nhãn phân
                   loại (UI). MVP hiện tại: TTS đọc mọi cue; render duck mọi cửa sổ
