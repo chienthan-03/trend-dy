@@ -326,7 +326,9 @@ async updateRemake(@Param("id") id: string, @Body() body: UpdateRemixDto) {
 
 Do **not** change worker `getRemake` call sites — they keep raw Prisma rows and call `resolveEffectiveTtsAudioMode` themselves.
 
-**Required:** enrich every remake-shaped controller response that `[remakeId]/page.tsx` merges into `remake` state (grep page for `onRemakeChange` / `setRemake` / `api.remix.*`). At minimum: GET, PATCH, classifySegments, updateSegmentRoles, enqueueTts / TTS-related returns, uploadDub, enqueueRender status returns, generateBanners if it returns remake. Missing enrich drops `effectiveTtsAudioMode` after those actions.
+**Required:** enrich remake-shaped controller responses that `[remakeId]/page.tsx` merges into `remake` state. At minimum: GET, PATCH, classifySegments, updateSegmentRoles, approve, reject. Prefer a thin `enrichRemake` at the controller (or service) boundary so new remake endpoints do not drop the field.
+
+Do **not** require enriching `enqueueTts` / `uploadDub` / `enqueueRender` / `generateBanners` — those return job/partial/banner payloads; optimistic UI spreads keep existing `effectiveTtsAudioMode`.
 
 - [ ] **Step 3: Smoke-typecheck / quick unit if easy**
 
