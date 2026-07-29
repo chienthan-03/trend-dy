@@ -180,6 +180,7 @@ model ViralRemake {
   mediaVideoKey              String?   @map("media_video_key")
   mediaDubAudioKey           String?   @map("media_dub_audio_key")
   dubSource                  String?   @map("dub_source") // tts | upload
+  ttsAudioMode               String?   @map("tts_audio_mode") // replace | mix | null → env
   renderMode                 String    @default("audio_only") @map("render_mode")
   renderPhase                String    @default("idle") @map("render_phase")
   bannerJson                 Json?     @map("banner_json")
