@@ -74,8 +74,8 @@ export class RemixController {
   }
 
   @Get(":id")
-  getRemake(@Param("id") id: string) {
-    return this.remixService.getRemake(id);
+  async getRemake(@Param("id") id: string) {
+    return this.remixService.enrichRemake(await this.remixService.getRemake(id));
   }
 
   @Get(":id/cost-estimate")
@@ -87,22 +87,26 @@ export class RemixController {
   }
 
   @Patch(":id")
-  updateRemake(@Param("id") id: string, @Body() body: UpdateRemixDto) {
-    return this.remixService.updateRemake(id, body);
+  async updateRemake(@Param("id") id: string, @Body() body: UpdateRemixDto) {
+    return this.remixService.enrichRemake(
+      await this.remixService.updateRemake(id, body),
+    );
   }
 
   @Post(":id/approve")
-  approveRemake(@Param("id") id: string, @Req() req: RequestWithUser) {
+  async approveRemake(@Param("id") id: string, @Req() req: RequestWithUser) {
     if (req.user?.role !== "admin") {
       throw new ForbiddenException("Admin role required to approve remix");
     }
 
-    return this.remixService.approve(id, req.user.id);
+    return this.remixService.enrichRemake(
+      await this.remixService.approve(id, req.user.id),
+    );
   }
 
   @Post(":id/reject")
-  rejectRemake(@Param("id") id: string) {
-    return this.remixService.reject(id);
+  async rejectRemake(@Param("id") id: string) {
+    return this.remixService.enrichRemake(await this.remixService.reject(id));
   }
 
   @Post(":id/regenerate")
@@ -230,19 +234,23 @@ export class RemixController {
   }
 
   @Post(":id/classify-segments")
-  classifySegments(
+  async classifySegments(
     @Param("id") id: string,
     @Body() body: ClassifySegmentsDto = {},
   ) {
-    return this.remixService.classifySegments(id, { mode: body?.mode });
+    return this.remixService.enrichRemake(
+      await this.remixService.classifySegments(id, { mode: body?.mode }),
+    );
   }
 
   @Patch(":id/transcript/roles")
-  updateSegmentRoles(
+  async updateSegmentRoles(
     @Param("id") id: string,
     @Body() body: UpdateSegmentRolesDto,
   ) {
-    return this.remixService.updateSegmentRoles(id, body.roles);
+    return this.remixService.enrichRemake(
+      await this.remixService.updateSegmentRoles(id, body.roles),
+    );
   }
 
   @Get(":id/export")

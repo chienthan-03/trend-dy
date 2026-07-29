@@ -1323,3 +1323,35 @@ describe("RemixService.updateRemake", () => {
     });
   });
 });
+
+describe("RemixService.enrichRemake", () => {
+  let service: RemixService;
+  let previousTtsAudioMode: string | undefined;
+
+  beforeEach(() => {
+    previousTtsAudioMode = process.env.REMIX_TTS_AUDIO_MODE;
+    service = new RemixService(
+      {} as PrismaService,
+      {} as JobsService,
+      {} as RemixStorageService,
+    );
+  });
+
+  afterEach(() => {
+    if (previousTtsAudioMode === undefined) {
+      delete process.env.REMIX_TTS_AUDIO_MODE;
+    } else {
+      process.env.REMIX_TTS_AUDIO_MODE = previousTtsAudioMode;
+    }
+  });
+
+  it("resolves null ttsAudioMode from env", () => {
+    process.env.REMIX_TTS_AUDIO_MODE = "mix";
+
+    const enriched = service.enrichRemake({
+      ttsAudioMode: null,
+    } as Parameters<RemixService["enrichRemake"]>[0]);
+
+    expect(enriched.effectiveTtsAudioMode).toBe("mix");
+  });
+});

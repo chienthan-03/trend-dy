@@ -31,6 +31,7 @@ import {
   getDubMaxUploadMb,
   getRemixScriptMode,
   isMediaDownloadAllowed,
+  resolveEffectiveTtsAudioMode,
   resolveTtsEngine,
 } from "./remix-config";
 import { RemixStorageService } from "./remix-storage.service";
@@ -51,6 +52,10 @@ export type TriggerRemixInput = {
 export type TriggerRemixResult = {
   remakeId: string;
   jobId: string;
+};
+
+export type ViralRemakeApi = ViralRemake & {
+  effectiveTtsAudioMode: "replace" | "mix";
 };
 
 export type ListRemakesFilters = {
@@ -114,6 +119,13 @@ export class RemixService {
     private readonly jobsService: JobsService,
     private readonly remixStorage: RemixStorageService,
   ) {}
+
+  enrichRemake(remake: ViralRemake): ViralRemakeApi {
+    return {
+      ...remake,
+      effectiveTtsAudioMode: resolveEffectiveTtsAudioMode(remake.ttsAudioMode),
+    };
+  }
 
   async triggerRemix(input: TriggerRemixInput): Promise<TriggerRemixResult> {
     if (!isRemixEnabled()) {
