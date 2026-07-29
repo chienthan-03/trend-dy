@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobsService } from "../jobs/jobs.service";
 import type { PrismaService } from "../../prisma/prisma.service";
 import type { RemixStorageService } from "./remix-storage.service";
-import { RemixService } from "./remix.service";
+import { invalidateDubAndRenderData, RemixService } from "./remix.service";
 
 const { classifyTranslatedSegmentsMock } = vi.hoisted(() => ({
   classifyTranslatedSegmentsMock: vi.fn(),
@@ -255,7 +255,35 @@ describe("RemixService.regenerate", () => {
     scriptMode: "caption",
     sourceTranscript: null,
     mediaAudioKey: null,
+    externalVideoId: "7123456789012345678",
+    sourceUrl: "https://www.douyin.com/video/7123456789012345678",
     ...overrides,
+  });
+
+  it("enqueues remix_resolve when external video id is still pending", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue(
+      mockRemake({
+        externalVideoId: "pending",
+        sourceUrl: "https://v.douyin.com/abc123/",
+      }),
+    );
+
+    const result = await service.regenerate("remake_1");
+
+    expect(result).toEqual({ remakeId: "remake_1", jobId: "job_regen" });
+    expect(jobsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "remix_resolve",
+        payload: {
+          remakeId: "remake_1",
+          shareUrl: "https://v.douyin.com/abc123/",
+        },
+      }),
+    );
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: { status: "running", pipelinePhase: "resolving" },
+    });
   });
 
   it("enqueues remix_generate for caption mode", async () => {
@@ -1238,6 +1266,60 @@ describe("RemixService.updateRemake", () => {
     expect(prisma.viralRemake.update).toHaveBeenCalledWith({
       where: { id: "remake_1" },
       data: { editorNotes: "note" },
+    });
+  });
+
+  it("persists ttsAudioMode and invalidates dub/render when mode changes (null -> mix)", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      ttsAudioMode: null,
+      renderOutputKey: "remix/remake_1/render.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+    });
+
+    await service.updateRemake("remake_1", { ttsAudioMode: "mix" });
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        ttsAudioMode: "mix",
+        ...invalidateDubAndRenderData,
+      },
+    });
+  });
+
+  it("does not invalidate when ttsAudioMode unchanged (mix -> mix)", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      ttsAudioMode: "mix",
+      renderOutputKey: "remix/remake_1/render.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+    });
+
+    await service.updateRemake("remake_1", { ttsAudioMode: "mix" });
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: { ttsAudioMode: "mix" },
+    });
+  });
+
+  it("allows clearing ttsAudioMode to null (follow env) and invalidates", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      ttsAudioMode: "mix",
+      renderOutputKey: "remix/remake_1/render.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+    });
+
+    await service.updateRemake("remake_1", { ttsAudioMode: null });
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
+      where: { id: "remake_1" },
+      data: {
+        ttsAudioMode: null,
+        ...invalidateDubAndRenderData,
+      },
     });
   });
 });

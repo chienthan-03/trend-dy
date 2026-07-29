@@ -226,15 +226,24 @@ export class RemixService {
     if (dto.ttsMaxSpeed !== undefined) {
       data.ttsMaxSpeed = dto.ttsMaxSpeed;
     }
+    if (dto.ttsAudioMode !== undefined) {
+      data.ttsAudioMode = dto.ttsAudioMode;
+    }
     if (dto.bannerJson !== undefined) {
       data.bannerJson = dto.bannerJson as Prisma.InputJsonValue;
     }
+
+    const modeChanged =
+      dto.ttsAudioMode !== undefined &&
+      dto.ttsAudioMode !== existing.ttsAudioMode;
 
     const invalidatesRender =
       (dto.renderMode !== undefined && dto.renderMode !== existing.renderMode) ||
       dto.bannerJson !== undefined;
 
-    if (invalidatesRender && existing.renderOutputKey) {
+    if (modeChanged) {
+      Object.assign(data, invalidateDubAndRenderData);
+    } else if (invalidatesRender && existing.renderOutputKey) {
       data.renderOutputKey = null;
       data.renderPhase = existing.mediaDubAudioKey ? "tts_ready" : "idle";
       data.renderError = null;
@@ -483,6 +492,26 @@ export class RemixService {
 
     if (!isRemixEnabled()) {
       throw new ServiceUnavailableException("Remix is disabled");
+    }
+
+    if (remake.externalVideoId === PENDING_EXTERNAL_VIDEO_ID) {
+      const shareUrl = remake.sourceUrl?.trim();
+      if (!shareUrl) {
+        throw new BadRequestException("Remake has no share URL to resolve");
+      }
+
+      const job = await this.jobsService.enqueue({
+        type: "remix_resolve",
+        payload: { remakeId: remake.id, shareUrl },
+        idempotencyKey: `remix_resolve:${remake.id}:${Date.now()}`,
+      });
+
+      await this.prisma.viralRemake.update({
+        where: { id: remake.id },
+        data: { status: "running", pipelinePhase: "resolving" },
+      });
+
+      return { remakeId: remake.id, jobId: job.jobId };
     }
 
     const scriptMode = remake.scriptMode ?? getRemixScriptMode();
