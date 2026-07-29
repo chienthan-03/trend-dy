@@ -171,4 +171,28 @@ describe("buildRemixCostEstimate", () => {
     expect(estimate.resolvedEngine).toBe("live");
     expect(estimate.defaultTtsEngine).toBe("piper");
   });
+
+  it("uses gpt-4o translate rates when REMIX_TRANSLATE_LLM_MODEL is set", () => {
+    process.env.REMIX_TRANSLATE_LLM_MODEL = "openai/gpt-4o";
+    process.env.REMIX_TRANSLATE_LLM_BATCH_SIZE = "10";
+    const source = transcript(
+      Array.from({ length: 20 }, (_, index) => ({
+        text: "你好世界".repeat(3),
+        startSec: index * 2,
+        endSec: index * 2 + 2,
+      })),
+    );
+
+    const estimate = buildRemixCostEstimate({
+      remakeId: "r1",
+      videoDurationSec: 40,
+      sourceTranscript: source,
+      translatedTranscript: null,
+    });
+
+    const retranslate = estimate.actions.find((a) => a.action === "retranslate");
+    expect(retranslate?.estimatedUsd).toBeGreaterThan(0.005);
+    expect(estimate.rates.translateModel).toBe("openai/gpt-4o");
+    expect(retranslate?.detail).toContain("openai/gpt-4o");
+  });
 });

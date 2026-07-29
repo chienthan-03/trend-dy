@@ -9,16 +9,21 @@ import {
 } from "./tts/batch-cues-for-tts";
 import {
   getPiperModelStem,
+  getRemixLlmModel,
   getSttCostPerMinuteUsd,
+  getSttModel,
   getTtsCostPer1kCharsUsd,
   getTtsMode,
   getTtsModel,
   resolveTtsEngine,
 } from "./remix-config";
 import {
+  getTranslateLlmBatchSize,
+  getTranslateModel,
   getTranslateProvider,
   resolveTranslateMode,
 } from "./translate-config";
+import { resolveLlmCostRates } from "../usage/cost";
 
 export type RemixCostActionId =
   | "retranscribe"
@@ -46,10 +51,13 @@ export type RemixCostEstimate = {
   disclaimer: string;
   rates: {
     sttPerMinuteUsd: number;
+    sttModel: string;
     ttsPer1kCharsUsd: number;
     ttsModel: string;
     ttsBatchMode: "batch" | "per_cue";
     translateMode: string;
+    translateModel: string;
+    remixLlmModel: string;
   };
   actions: RemixActionCostEstimate[];
   lastTtsCostUsd: number | null;
@@ -74,12 +82,20 @@ const transcriptCharCount = (
 };
 
 /** Rough token estimate for CJK-heavy source (chars ≈ tokens for Chinese). */
-const estimateTranslateTokens = (sourceChars: number) => {
-  const promptOverhead = 800;
-  const tokensIn = Math.max(1, Math.ceil(sourceChars * 1.1 + promptOverhead));
-  // VI output often longer than ZH source in characters.
+const estimateTranslateTokens = (
+  sourceChars: number,
+  segmentCount: number,
+  batchSize: number,
+) => {
+  const batchCount = Math.max(1, Math.ceil(segmentCount / batchSize));
+  const charsPerBatch = sourceChars / batchCount;
+  const tokensInPerBatch = Math.max(
+    1,
+    Math.ceil(charsPerBatch * 1.1 + 900),
+  );
+  const tokensIn = tokensInPerBatch * batchCount;
   const tokensOut = Math.max(1, Math.ceil(sourceChars * 1.4));
-  return { tokensIn, tokensOut };
+  return { tokensIn, tokensOut, batchCount };
 };
 
 const estimateClassifyTokens = (segmentCount: number) => {
@@ -129,7 +145,11 @@ export const buildRemixCostEstimate = (input: {
 
   const sourceChars = transcriptCharCount(input.sourceTranscript);
   const viChars = transcriptCharCount(input.translatedTranscript);
+  const sourceSegmentCount = input.sourceTranscript?.segments.length ?? 0;
   const translateMode = resolveTranslateMode();
+  const translateModel = getTranslateModel();
+  const remixLlmModel = getRemixLlmModel();
+  const translateBatchSize = getTranslateLlmBatchSize();
   const ttsBatchMode = getTtsBatchMode();
 
   // --- STT / retranscribe ---
@@ -159,7 +179,7 @@ export const buildRemixCostEstimate = (input: {
       estimatedUsd: usd,
       available: true,
       durationSec,
-      detail: `~${Math.round(durationSec)}s · $${getSttCostPerMinuteUsd().toFixed(4)}/phút`,
+      detail: `${getSttModel()} · ~${Math.round(durationSec)}s · $${getSttCostPerMinuteUsd().toFixed(4)}/phút`,
     };
   }
 
@@ -201,15 +221,22 @@ export const buildRemixCostEstimate = (input: {
       detail: `HuggingFace · ${sourceChars.toLocaleString()} ký tự (ước $0 nếu free tier)`,
     };
   } else {
-    const { tokensIn, tokensOut } = estimateTranslateTokens(sourceChars);
-    const usd = roundUsd(estimateLlmCostUsd(tokensIn, tokensOut));
+    const { tokensIn, tokensOut, batchCount } = estimateTranslateTokens(
+      sourceChars,
+      sourceSegmentCount,
+      translateBatchSize,
+    );
+    const usd = roundUsd(
+      estimateLlmCostUsd(tokensIn, tokensOut, translateModel),
+    );
+    const translateRates = resolveLlmCostRates(translateModel);
     retranslate = {
       action: "retranslate",
       label: "Dịch transcript",
       estimatedUsd: usd,
       available: true,
       charCount: sourceChars,
-      detail: `LLM · ~${tokensIn + tokensOut} tokens · ${sourceChars.toLocaleString()} ký tự nguồn`,
+      detail: `${translateModel} · ${batchCount} batch × ${translateBatchSize} cue · ~${tokensIn + tokensOut} tokens · $${translateRates.inputPer1kUsd}/1k in`,
     };
   }
 
@@ -265,7 +292,7 @@ export const buildRemixCostEstimate = (input: {
       available: true,
       charCount: billedChars,
       batchCount: batches.length,
-      detail: `${batches.length} batch TTS · ${billedChars.toLocaleString()} ký tự · $${getTtsCostPer1kCharsUsd()}/1k (cache hit = $0)`,
+      detail: `${getTtsModel()} · ${batches.length} batch · ${billedChars.toLocaleString()} ký tự · $${getTtsCostPer1kCharsUsd()}/1k (cache hit = $0)`,
     };
   }
 
@@ -293,9 +320,11 @@ export const buildRemixCostEstimate = (input: {
     classify = {
       action: "classify",
       label: "Phân loại lại",
-      estimatedUsd: roundUsd(estimateLlmCostUsd(tokensIn, tokensOut)),
+      estimatedUsd: roundUsd(
+        estimateLlmCostUsd(tokensIn, tokensOut, remixLlmModel),
+      ),
       available: true,
-      detail: `LLM · ${segmentCount} cue (thường rẻ; nhiều đoạn có thể local)`,
+      detail: `${remixLlmModel} · ${segmentCount} cue`,
     };
   }
 
@@ -311,9 +340,11 @@ export const buildRemixCostEstimate = (input: {
     : {
         action: "banners",
         label: "Tạo nội dung banner (AI)",
-        estimatedUsd: roundUsd(estimateLlmCostUsd(600, 200)),
+        estimatedUsd: roundUsd(
+          estimateLlmCostUsd(600, 200, remixLlmModel),
+        ),
         available: true,
-        detail: "1 lần LLM ngắn",
+        detail: `${remixLlmModel} · 1 lần LLM ngắn`,
       };
 
   const render: RemixActionCostEstimate = {
@@ -328,13 +359,16 @@ export const buildRemixCostEstimate = (input: {
     remakeId: input.remakeId,
     currency: "USD",
     disclaimer:
-      "Ước lượng theo rate cấu hình (.env). OpenRouter có thể lệch; TTS cache hit không tính lại.",
+      "Ước lượng theo model + rate OpenRouter (.env). TTS cache hit không tính lại; token thực tế có thể lệch ±20%.",
     rates: {
       sttPerMinuteUsd: getSttCostPerMinuteUsd(),
+      sttModel: getSttModel(),
       ttsPer1kCharsUsd: getTtsCostPer1kCharsUsd(),
       ttsModel: getTtsModel(),
       ttsBatchMode,
       translateMode,
+      translateModel,
+      remixLlmModel,
     },
     actions: [retranscribe, retranslate, tts, classify, banners, render],
     lastTtsCostUsd:

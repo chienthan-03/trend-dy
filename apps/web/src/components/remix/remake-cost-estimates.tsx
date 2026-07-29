@@ -72,7 +72,8 @@ export const RemakeCostEstimates = ({
           Ước chi phí (tham khảo)
         </h3>
         <span className="text-xs text-gray-500">
-          TTS {estimate.rates.ttsBatchMode} · $
+          STT {estimate.rates.sttModel} · Dịch {estimate.rates.translateModel} ·
+          TTS {estimate.rates.ttsModel} ({estimate.rates.ttsBatchMode}) · $
           {estimate.rates.ttsPer1kCharsUsd}/1k ký tự
         </span>
       </div>

@@ -118,7 +118,7 @@ export class UnderstandProcessor extends WorkerHost {
         model: llm.model,
         tokensIn: llm.tokensIn,
         tokensOut: llm.tokensOut,
-        costUsd: estimateLlmCostUsd(llm.tokensIn, llm.tokensOut),
+        costUsd: estimateLlmCostUsd(llm.tokensIn, llm.tokensOut, llm.model),
       },
     });
 

@@ -1,6 +1,7 @@
 import type { DouyinVideoDetail } from "../../douyin-video.adapter";
 
 const DEFAULT_BASE_URL = "https://api.justoneapi.com";
+const SHARE_URL_TRANSFER_TIMEOUT_MS = 60_000;
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -25,6 +26,85 @@ const pickString = (...values: unknown[]): string => {
   return "";
 };
 
+export const extractDouyinShareUrl = (input: string): string | null => {
+  const match = input.match(/https?:\/\/v\.douyin\.com\/[A-Za-z0-9_-]+\/?/i);
+  return match?.[0] ?? null;
+};
+
+export const extractDouyinVideoIdFromUrl = (input: string): string | null => {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const patterns = [
+    /\/video\/(\d+)/i,
+    /\/note\/(\d+)/i,
+    /\/share\/video\/(\d+)/i,
+    /[?&](?:modal_id|item_ids|aweme_id)=(\d+)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+};
+
+export const parseJustOneShareUrlTransferData = (
+  data: unknown,
+): { videoId: string; canonicalUrl?: string } | null => {
+  if (typeof data === "string" && data.trim()) {
+    const canonicalUrl = data.trim();
+    const videoId = extractDouyinVideoIdFromUrl(canonicalUrl);
+    if (videoId) {
+      return { videoId, canonicalUrl };
+    }
+    return null;
+  }
+
+  const root = asRecord(data);
+  if (!root) {
+    return null;
+  }
+
+  const videoId = pickString(
+    root.aweme_id,
+    root.awemeId,
+    root.video_id,
+    root.videoId,
+    root.id,
+  );
+
+  const canonicalUrl = pickString(
+    root.url,
+    root.share_url,
+    root.shareUrl,
+    root.canonical_url,
+    root.redirect_url,
+    root.redirectUrl,
+  );
+
+  if (videoId) {
+    return {
+      videoId,
+      canonicalUrl: canonicalUrl || `https://www.douyin.com/video/${videoId}`,
+    };
+  }
+
+  if (canonicalUrl) {
+    const fromUrl = extractDouyinVideoIdFromUrl(canonicalUrl);
+    if (fromUrl) {
+      return { videoId: fromUrl, canonicalUrl };
+    }
+  }
+
+  return null;
+};
+
 const resolveBaseUrl = (): string => {
   const fromEnv = process.env.DOUYIN_API_BASE_URL?.trim();
   if (fromEnv) {
@@ -43,7 +123,11 @@ const resolveToken = (): string => {
   return token;
 };
 
-const fetchJustOneJson = async (path: string, params: Record<string, string>): Promise<unknown> => {
+const fetchJustOneJson = async (
+  path: string,
+  params: Record<string, string>,
+  timeoutMs = 30_000,
+): Promise<unknown> => {
   const token = resolveToken();
   const baseUrl = resolveBaseUrl();
   const url = new URL(`${baseUrl}${path}`);
@@ -58,7 +142,7 @@ const fetchJustOneJson = async (path: string, params: Record<string, string>): P
       Accept: "application/json",
       "User-Agent": "ai-content-factory/1.0",
     },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!response.ok) {
@@ -67,12 +151,13 @@ const fetchJustOneJson = async (path: string, params: Record<string, string>): P
   }
 
   const payload = (await response.json()) as {
-    code?: number;
+    code?: number | string;
     message?: string | null;
     data?: unknown;
   };
 
-  if (payload.code !== 0) {
+  const code = Number(payload.code);
+  if (!Number.isFinite(code) || code !== 0) {
     throw new Error(
       `Just One API error ${payload.code ?? "?"}: ${payload.message ?? "unknown"}`,
     );
@@ -84,35 +169,34 @@ const fetchJustOneJson = async (path: string, params: Record<string, string>): P
 export const resolveJustOneShareUrl = async (
   shareUrl: string,
 ): Promise<{ videoId: string; canonicalUrl?: string }> => {
-  const data = await fetchJustOneJson("/api/douyin/share-url-transfer/v1", {
-    shareUrl,
-  });
-
-  const root = asRecord(data) ?? {};
-  const videoId = pickString(
-    root.aweme_id,
-    root.awemeId,
-    root.video_id,
-    root.videoId,
-    root.id,
-  );
-
-  if (!videoId) {
-    throw new Error("Just One API share-url-transfer returned no video id");
+  const trimmed = shareUrl.trim();
+  if (!trimmed) {
+    throw new Error("shareUrl is required");
   }
 
-  const canonicalUrl = pickString(
-    root.url,
-    root.share_url,
-    root.shareUrl,
-    root.canonical_url,
-    `https://www.douyin.com/video/${videoId}`,
+  const directVideoId = extractDouyinVideoIdFromUrl(trimmed);
+  if (directVideoId) {
+    return {
+      videoId: directVideoId,
+      canonicalUrl: `https://www.douyin.com/video/${directVideoId}`,
+    };
+  }
+
+  const shortShareUrl = extractDouyinShareUrl(trimmed) ?? trimmed;
+  const data = await fetchJustOneJson(
+    "/api/douyin/share-url-transfer/v1",
+    { shareUrl: shortShareUrl },
+    SHARE_URL_TRANSFER_TIMEOUT_MS,
   );
 
-  return {
-    videoId,
-    canonicalUrl: canonicalUrl || undefined,
-  };
+  const parsed = parseJustOneShareUrlTransferData(data);
+  if (!parsed?.videoId) {
+    throw new Error(
+      `Just One API share-url-transfer returned no video id (data=${JSON.stringify(data).slice(0, 200)})`,
+    );
+  }
+
+  return parsed;
 };
 
 export const mapJustOneVideoDetail = (videoId: string, data: unknown): DouyinVideoDetail => {
