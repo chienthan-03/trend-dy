@@ -26,10 +26,13 @@ import {
   getMediaTtlDays,
   getPiperModelStem,
   getRemixScriptMode,
-  getTtsAudioMode,
+  getRemixLlmModel,
+  getSttLanguageHint,
   getTtsModel,
   getTtsTimingMode,
+  resolveEffectiveTtsAudioMode,
   resolveTtsEngine,
+  resolveEffectiveTtsMaxSpeed,
   resolveTtsMaxSpeed,
   resolveTtsSpeed,
 } from "../../modules/remix/remix-config";
@@ -491,7 +494,9 @@ export class RemixProcessor extends WorkerHost {
       costUsd: sttCostUsd,
       timingDegraded,
       timingCoarse,
-    } = await transcribeAudio(audioBuffer);
+    } = await transcribeAudio(audioBuffer, {
+      languageHint: getSttLanguageHint(),
+    });
 
     const timingWarning =
       timingDegraded || timingCoarse
@@ -576,7 +581,7 @@ export class RemixProcessor extends WorkerHost {
           model: translated.model,
           tokensIn,
           tokensOut,
-          costUsd: estimateLlmCostUsd(tokensIn, tokensOut),
+          costUsd: estimateLlmCostUsd(tokensIn, tokensOut, translated.model),
         },
       });
     }
@@ -673,7 +678,11 @@ export class RemixProcessor extends WorkerHost {
       sourceSnapshot: remake.sourceSnapshot,
       packageJson,
     });
-    const costUsd = estimateLlmCostUsd(llm.tokensIn, llm.tokensOut);
+    const costUsd = estimateLlmCostUsd(
+      llm.tokensIn,
+      llm.tokensOut,
+      getRemixLlmModel(),
+    );
 
     await this.prisma.viralRemake.update({
       where: { id: remakeId },
@@ -771,7 +780,7 @@ export class RemixProcessor extends WorkerHost {
     // model stem instead of the user-facing voiceId.
     const engineVoiceId = isPiper ? getPiperModelStem() : voiceId;
     const baseSpeed = resolveTtsSpeed(remake.ttsSpeed);
-    const maxSpeed = resolveTtsMaxSpeed(remake.ttsMaxSpeed);
+    const maxSpeed = resolveEffectiveTtsMaxSpeed(remake.ttsSpeed, remake.ttsMaxSpeed);
 
     const fitFailedIndexes: number[] = [];
     const timelineByIndex = new Map<
@@ -780,7 +789,7 @@ export class RemixProcessor extends WorkerHost {
     >();
     let ttsCostUsd = 0;
 
-    const audioMode = getTtsAudioMode();
+    const audioMode = resolveEffectiveTtsAudioMode(remake.ttsAudioMode);
     const timingMode = getTtsTimingMode();
     const useSequential = timingMode === "sequential" && audioMode === "replace";
     // Hybrid only applies to full soundtrack replace — `mix` narration-only
@@ -1240,8 +1249,9 @@ export class RemixProcessor extends WorkerHost {
       this.remixStorage.getDub(remake.mediaDubAudioKey),
     ]);
 
+    const audioMode = resolveEffectiveTtsAudioMode(remake.ttsAudioMode);
     let renderedBuffer: Buffer;
-    if (remake.dubSource === "tts" && getTtsAudioMode() === "mix") {
+    if (remake.dubSource === "tts" && audioMode === "mix") {
       // Narration-only dub: duck original under Review windows; keep film on source.
       const translated =
         remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;

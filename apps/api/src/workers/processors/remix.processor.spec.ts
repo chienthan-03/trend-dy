@@ -99,6 +99,7 @@ describe("RemixProcessor", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.REMIX_TTS_AUDIO_MODE;
 
     prisma = {
       viralRemake: {
@@ -364,6 +365,7 @@ describe("RemixProcessor", () => {
       mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
       renderMode: "audio_only",
       dubSource: "tts",
+      ttsAudioMode: "mix",
       sourceTranscriptTranslated: {
         segments: [
           { startSec: 0, endSec: 1, role: "narration" },
@@ -403,6 +405,110 @@ describe("RemixProcessor", () => {
     expect(markCompleted).toHaveBeenCalledWith(prisma, "job_render_mix", {
       remakeId: "remake_1",
     });
+  });
+
+  it("remix_render uses persisted ttsAudioMode=mix over env replace", async () => {
+    process.env.REMIX_TTS_AUDIO_MODE = "replace";
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "audio_only",
+      dubSource: "tts",
+      ttsAudioMode: "mix",
+      sourceTranscriptTranslated: {
+        segments: [{ startSec: 0, endSec: 2, role: "narration" }],
+      },
+    });
+
+    const job = {
+      id: "job_render_persisted_mix",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(remixRender.renderAudioMix).toHaveBeenCalled();
+    expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
+  });
+
+  it("remix_render uses persisted ttsAudioMode=replace over env mix", async () => {
+    process.env.REMIX_TTS_AUDIO_MODE = "mix";
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "audio_only",
+      dubSource: "tts",
+      ttsAudioMode: "replace",
+      sourceTranscriptTranslated: {
+        segments: [{ startSec: 0, endSec: 2, role: "narration" }],
+      },
+    });
+
+    const job = {
+      id: "job_render_persisted_replace",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(remixRender.renderAudioOnly).toHaveBeenCalled();
+    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
+  });
+
+  it("remix_render falls back to env mix when ttsAudioMode is null", async () => {
+    process.env.REMIX_TTS_AUDIO_MODE = "mix";
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "audio_only",
+      dubSource: "tts",
+      ttsAudioMode: null,
+      sourceTranscriptTranslated: {
+        segments: [{ startSec: 0, endSec: 2, role: "narration" }],
+      },
+    });
+
+    const job = {
+      id: "job_render_env_mix_fallback",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(remixRender.renderAudioMix).toHaveBeenCalled();
+    expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
+  });
+
+  it("remix_render ignores ttsAudioMode=mix when dubSource is upload", async () => {
+    process.env.REMIX_TTS_AUDIO_MODE = "mix";
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaVideoKey: "remix/remake_1/source-video.mp4",
+      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderMode: "audio_only",
+      dubSource: "upload",
+      ttsAudioMode: "mix",
+      sourceTranscriptTranslated: {
+        segments: [{ startSec: 0, endSec: 2, role: "narration" }],
+      },
+    });
+
+    const job = {
+      id: "job_render_upload_ignores_mix",
+      name: "remix_render",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(remixRender.renderAudioOnly).toHaveBeenCalled();
+    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
   });
 
   it("remix_render fails clearly when mediaVideoKey or mediaDubAudioKey is missing", async () => {
@@ -476,6 +582,7 @@ describe("RemixProcessor", () => {
       mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
       renderMode: "banner_audio",
       dubSource: "tts",
+      ttsAudioMode: "mix",
       bannerJson: { header: "Header", bottom: "Bottom" },
       sourceTranscriptTranslated: {
         segments: [{ startSec: 5, endSec: 6, role: "narration" }],

@@ -740,6 +740,47 @@ describe("RemixProcessor (Full Script Mode)", () => {
     ]);
   });
 
+  it("handleTts skips source-role segments when persisted ttsAudioMode=mix overrides env replace", async () => {
+    process.env.REMIX_TTS_AUDIO_MODE = "replace";
+    const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
+
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      dubSource: null,
+      mediaDubAudioKey: null,
+      ttsVoiceId: null,
+      ttsAudioMode: "mix",
+      videoDurationSec: 9,
+      sourceTranscriptTranslated: {
+        version: 1,
+        language: "vi",
+        durationSec: 9,
+        segments: [
+          { startSec: 0, endSec: 3, text: "Xin chào", role: "narration", roleSource: "manual" },
+          { startSec: 3, endSec: 6, text: "Ố", role: "source", roleSource: "manual" },
+          { startSec: 6, endSec: 9, text: "Tạm biệt", role: "narration", roleSource: "manual" },
+        ],
+        fullText: "Xin chào Ố Tạm biệt",
+        provider: "fake",
+        model: "fake",
+      },
+    });
+
+    const job = {
+      id: "job_tts_persisted_mix",
+      name: "remix_tts",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(synthSpy).toHaveBeenCalledTimes(2);
+    expect(synthSpy.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "Xin chào",
+      "Tạm biệt",
+    ]);
+  });
+
   it("handleTts trusts fine cue windows without sentence-split or speech align", async () => {
     process.env.REMIX_TTS_TIMING_MODE = "strict";
     const synthSpy = vi.spyOn(FakeTtsAdapter.prototype, "synthesize");
@@ -1455,6 +1496,7 @@ describe("RemixProcessor (Full Script Mode)", () => {
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
       dubSource: "tts",
+      ttsAudioMode: "mix",
       renderMode: "audio_only",
       mediaVideoKey: "remix/remake_1/source-video.mp4",
       mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
