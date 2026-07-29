@@ -4,6 +4,7 @@ import type {
   RemixBannerJson,
   RemixRenderMode,
   RemixRenderPhase,
+  RemixTtsAudioMode,
 } from "@factory/shared";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Alert, Badge, Button, Input, Label, Select, Spinner } from "@/components/ui";
@@ -32,24 +33,37 @@ const ENGINE_HINTS: Record<TtsEngine, string> = {
   live: "Dùng credit — tính phí theo ký tự.",
 };
 
+const formatSpeedLabel = (value: number): string => `${value}×`;
+
+const TTS_FAST_SPEED_VALUES = [1, 1.15, 1.25, 1.35, 1.45, 1.5, 1.75, 2] as const;
+
 const TTS_SPEED_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 0.85, label: "Chậm (0.85×)" },
-  { value: 1, label: "Bình thường (1.0×)" },
-  { value: 1.15, label: "Nhanh (1.15×)" },
-  { value: 1.25, label: "Khá nhanh (1.25×)" },
-  { value: 1.35, label: "Nhanh hơn (1.35×)" },
-  { value: 1.45, label: "Cực nhanh (1.45×)" },
-  { value: 1.5, label: "Rất nhanh (1.5×)" },
+  ...TTS_FAST_SPEED_VALUES.map((value) => ({
+    value,
+    label:
+      value === 1
+        ? "Bình thường (1.0×)"
+        : value === 1.15
+          ? "Nhanh (1.15×)"
+          : value === 1.25
+            ? "Khá nhanh (1.25×)"
+            : value === 1.35
+              ? "Nhanh hơn (1.35×)"
+              : value === 1.45
+                ? "Cực nhanh (1.45×)"
+                : value === 1.5
+                  ? "Rất nhanh (1.5×)"
+                  : formatSpeedLabel(value),
+  })),
 ];
 
 const TTS_MAX_SPEED_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "server", label: "Theo server" },
-  { value: "1", label: "1.0×" },
-  { value: "1.15", label: "1.15×" },
-  { value: "1.25", label: "1.25×" },
-  { value: "1.35", label: "1.35×" },
-  { value: "1.45", label: "1.45×" },
-  { value: "1.5", label: "1.5×" },
+  ...TTS_FAST_SPEED_VALUES.map((value) => ({
+    value: String(value),
+    label: formatSpeedLabel(value),
+  })),
 ];
 
 const resolveTtsSpeedValue = (remake: ViralRemake): number => {
@@ -57,8 +71,13 @@ const resolveTtsSpeedValue = (remake: ViralRemake): number => {
   return TTS_SPEED_OPTIONS.some((option) => option.value === speed) ? speed : 1;
 };
 
-const resolveTtsMaxSpeedSelectValue = (remake: ViralRemake): string =>
-  remake.ttsMaxSpeed == null ? "server" : String(remake.ttsMaxSpeed);
+const resolveTtsMaxSpeedSelectValue = (remake: ViralRemake): string => {
+  if (remake.ttsMaxSpeed == null) return "server";
+  const match = TTS_MAX_SPEED_OPTIONS.find(
+    (option) => option.value !== "server" && Number(option.value) === remake.ttsMaxSpeed,
+  );
+  return match?.value ?? "server";
+};
 
 /** Bootstrap: prefer the persisted engine, else server default — never silently assume live. */
 const resolveInitialEngine = (
@@ -69,6 +88,16 @@ const resolveInitialEngine = (
     return remake.ttsEngine;
   }
   return costEstimate?.defaultTtsEngine ?? "piper";
+};
+
+const TTS_AUDIO_MODE_OPTIONS: Array<{ id: RemixTtsAudioMode; label: string }> = [
+  { id: "replace", label: "Thay toàn bộ audio" },
+  { id: "mix", label: "Giữ nhạc nền (mix)" },
+];
+
+const TTS_AUDIO_MODE_HINTS: Record<RemixTtsAudioMode, string> = {
+  replace: "Chỉ còn giọng VI — mất nhạc/SFX gốc.",
+  mix: "Giữ audio gốc dưới lời VI (duck). Tiếng gốc có thể còn lí nhí. Không tách riêng nhạc. Cần Tạo audio VI lại sau khi đổi mode hoặc đổi Review/Giữ gốc.",
 };
 
 const RENDER_PHASE_LABELS: Record<RemixRenderPhase, string> = {
@@ -111,6 +140,9 @@ export const VideoOutputPanel = ({
   const [renderMode, setRenderMode] = useState<RemixRenderMode>(
     remake.renderMode ?? "audio_only",
   );
+  const [ttsAudioMode, setTtsAudioMode] = useState<RemixTtsAudioMode>(
+    remake.effectiveTtsAudioMode ?? remake.ttsAudioMode ?? "replace",
+  );
   const [voiceId, setVoiceId] = useState<string>(
     remake.ttsVoiceId || VOICE_OPTIONS[0].id,
   );
@@ -135,6 +167,7 @@ export const VideoOutputPanel = ({
     if (remakeIdRef.current === remake.id) return;
     remakeIdRef.current = remake.id;
     setRenderMode(remake.renderMode ?? "audio_only");
+    setTtsAudioMode(remake.effectiveTtsAudioMode ?? remake.ttsAudioMode ?? "replace");
     setVoiceId(remake.ttsVoiceId || VOICE_OPTIONS[0].id);
     setTtsSpeed(resolveTtsSpeedValue(remake));
     setTtsMaxSpeed(resolveTtsMaxSpeedSelectValue(remake));
@@ -163,6 +196,11 @@ export const VideoOutputPanel = ({
   const isBannerMode = renderMode === "banner_audio";
   const isTtsBusy = renderPhase === "tts" || pending === "tts";
   const isRenderBusy = renderPhase === "rendering" || pending === "render";
+  const isTtsAudioModeDisabled =
+    pending === "tts-audio-mode" ||
+    renderPhase === "tts" ||
+    renderPhase === "rendering" ||
+    remake.dubSource === "upload";
   const bannerReady = isBannerMode
     ? Boolean(remake.bannerJson) || Boolean(bannerHeader.trim() && bannerBottom.trim())
     : true;
@@ -204,6 +242,25 @@ export const VideoOutputPanel = ({
     }
   };
 
+  const handleTtsAudioModeChange = async (mode: RemixTtsAudioMode) => {
+    setTtsAudioMode(mode);
+    setPending("tts-audio-mode");
+    try {
+      const updated = await api.remix.update(remake.id, { ttsAudioMode: mode });
+      setTtsAudioMode(updated.effectiveTtsAudioMode);
+      onRemakeChange(updated);
+      onInfo(
+        mode === "mix"
+          ? "Đã chọn giữ nhạc nền — tạo lại audio VI trước khi render."
+          : "Đã chọn thay toàn bộ audio — tạo lại audio VI trước khi render.",
+      );
+    } catch (err) {
+      onError(getErrorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
   const handleVoiceChange = async (id: string) => {
     setVoiceId(id);
     setPending("voice");
@@ -222,7 +279,18 @@ export const VideoOutputPanel = ({
     setTtsSpeed(nextSpeed);
     setPending("ttsSpeed");
     try {
-      const updated = await api.remix.update(remake.id, { ttsSpeed: nextSpeed });
+      const currentMax =
+        ttsMaxSpeed === "server" ? null : Number(ttsMaxSpeed);
+      const shouldBumpMax =
+        nextSpeed > 1 && (currentMax == null || currentMax < nextSpeed);
+      const bumpedMax = shouldBumpMax ? nextSpeed : undefined;
+      if (bumpedMax != null) {
+        setTtsMaxSpeed(String(bumpedMax));
+      }
+      const updated = await api.remix.update(remake.id, {
+        ttsSpeed: nextSpeed,
+        ...(bumpedMax != null ? { ttsMaxSpeed: bumpedMax } : {}),
+      });
       onRemakeChange(updated);
     } catch (err) {
       onError(getErrorMessage(err));
@@ -504,8 +572,8 @@ export const VideoOutputPanel = ({
             ))}
           </Select>
           <p className="text-xs text-gray-500">
-            Hệ số trên giọng TTS gốc. Nếu vẫn chậm hơn video, tăng «Khớp timeline tối
-            đa» (ví dụ 1.5×).
+            Tăng tốc đều mọi câu. Tổng tốc độ khi khớp khung phụ đề ≈ tốc độ đọc ×
+            khớp timeline (ví dụ 1.35 × 1.5 ≈ 2×). Cần «Tạo audio VI» lại sau khi đổi.
           </p>
         </div>
 
@@ -525,10 +593,48 @@ export const VideoOutputPanel = ({
             ))}
           </Select>
           <p className="text-xs text-gray-500">
-            Tăng tốc thêm khi câu dài hơn khung phụ đề. Cần bấm «Tạo audio VI» lại sau
-            khi đổi.
+            Tăng tốc thêm khi câu VI dài hơn khung phụ đề ZH. Tự nâng tối thiểu bằng
+            tốc độ đọc; thử 1.75–2× nếu vẫn lệch. Cần «Tạo audio VI» lại sau khi đổi.
           </p>
         </div>
+      </fieldset>
+
+      <fieldset className="grid gap-3 rounded border border-gray-200 p-3">
+        <legend className="px-1 text-sm font-medium text-gray-700">
+          Cách ghép audio VI
+        </legend>
+        {remake.dubSource === "upload" ? (
+          <p className="text-xs text-gray-500">
+            Audio tải lên luôn thay toàn bộ track.
+          </p>
+        ) : null}
+        <div
+          className="flex flex-wrap gap-4"
+          role="radiogroup"
+          aria-label="Chế độ ghép audio VI"
+        >
+          {TTS_AUDIO_MODE_OPTIONS.map((option) => (
+            <label
+              key={option.id}
+              className="flex items-center gap-2 text-sm text-gray-700"
+              htmlFor={`tts-audio-mode-${option.id}`}
+            >
+              <input
+                type="radio"
+                id={`tts-audio-mode-${option.id}`}
+                name="tts-audio-mode"
+                value={option.id}
+                checked={ttsAudioMode === option.id}
+                onChange={() => handleTtsAudioModeChange(option.id)}
+                disabled={isTtsAudioModeDisabled}
+                className="h-4 w-4"
+                aria-label={option.label}
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-gray-500">{TTS_AUDIO_MODE_HINTS[ttsAudioMode]}</p>
       </fieldset>
 
       <fieldset

@@ -6,6 +6,7 @@ import type {
   RemixRenderPhase,
   RemixSegmentRole,
   RemixTranscriptV1,
+  RemixTtsAudioMode,
 } from "@factory/shared";
 
 const API_BASE = "/api/v1";
@@ -161,6 +162,8 @@ export type ViralRemake = {
   ttsSpeed: number;
   ttsMaxSpeed: number | null;
   ttsEngine?: "piper" | "live" | null;
+  ttsAudioMode: RemixTtsAudioMode | null;
+  effectiveTtsAudioMode: RemixTtsAudioMode;
   ttsFitFailedIndexes: number[];
   classifyWarning?: string | null;
   timingWarning?: string | null;
@@ -212,10 +215,13 @@ export type RemixCostEstimate = {
   disclaimer: string;
   rates: {
     sttPerMinuteUsd: number;
+    sttModel: string;
     ttsPer1kCharsUsd: number;
     ttsModel: string;
     ttsBatchMode: "batch" | "per_cue";
     translateMode: string;
+    translateModel: string;
+    remixLlmModel: string;
   };
   actions: RemixActionCostEstimate[];
   lastTtsCostUsd: number | null;
@@ -417,6 +423,7 @@ export const api = {
         ttsVoiceId?: string;
         ttsSpeed?: number;
         ttsMaxSpeed?: number | null;
+        ttsAudioMode?: RemixTtsAudioMode | null;
         bannerJson?: RemixBannerJson;
       },
     ) =>
