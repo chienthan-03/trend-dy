@@ -92,14 +92,11 @@ describe("RemixProcessor", () => {
   let remixRender: {
     renderAudioOnly: ReturnType<typeof vi.fn>;
     renderBannerAudio: ReturnType<typeof vi.fn>;
-    renderAudioMix: ReturnType<typeof vi.fn>;
-    renderBannerAudioMix: ReturnType<typeof vi.fn>;
   };
   let processor: RemixProcessor;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.REMIX_TTS_AUDIO_MODE;
 
     prisma = {
       viralRemake: {
@@ -136,10 +133,11 @@ describe("RemixProcessor", () => {
       renderBannerAudio: vi
         .fn()
         .mockResolvedValue(Buffer.from("rendered-banner-mp4")),
-      renderAudioMix: vi.fn().mockResolvedValue(Buffer.from("rendered-mix-mp4")),
-      renderBannerAudioMix: vi
-        .fn()
-        .mockResolvedValue(Buffer.from("rendered-banner-mix-mp4")),
+    };
+    const remixBgmService = {
+      assertTrackId: vi.fn((id: string) => id),
+      readTrackBuffer: vi.fn().mockResolvedValue(Buffer.from("bgm-audio")),
+      getTrackDurationSec: vi.fn().mockResolvedValue(180),
     };
 
     mockResolveShareUrl.mockResolvedValue({
@@ -163,6 +161,7 @@ describe("RemixProcessor", () => {
       remixStorage as unknown as RemixStorageService,
       {} as RemixMediaCleanupService,
       remixRender as unknown as RemixRenderService,
+      remixBgmService as unknown as import("../../modules/remix/remix-bgm.service").RemixBgmService,
     );
   });
 
@@ -315,8 +314,8 @@ describe("RemixProcessor", () => {
     expect(remixRender.renderAudioOnly).toHaveBeenCalledWith(
       Buffer.from("video"),
       Buffer.from("dub"),
+      undefined,
     );
-    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
     expect(remixStorage.putRender).toHaveBeenCalledWith(
       "remake_1",
       Buffer.from("rendered-mp4"),
@@ -354,161 +353,8 @@ describe("RemixProcessor", () => {
     expect(remixRender.renderAudioOnly).toHaveBeenCalledWith(
       Buffer.from("video"),
       Buffer.from("dub"),
+      undefined,
     );
-    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
-  });
-
-  it("remix_render (dubSource=tts) mixes original audio with merged narration intervals and marks render_ready", async () => {
-    remixService.getRemake.mockResolvedValue({
-      id: "remake_1",
-      mediaVideoKey: "remix/remake_1/source-video.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
-      renderMode: "audio_only",
-      dubSource: "tts",
-      ttsAudioMode: "mix",
-      sourceTranscriptTranslated: {
-        segments: [
-          { startSec: 0, endSec: 1, role: "narration" },
-          { startSec: 0.8, endSec: 2, role: "narration" },
-          { startSec: 3, endSec: 4, role: "source" },
-        ],
-      },
-    });
-
-    const job = {
-      id: "job_render_mix",
-      name: "remix_render",
-      data: { remakeId: "remake_1" },
-    } as unknown as BullJob;
-
-    await processor.process(job);
-
-    expect(remixRender.renderAudioMix).toHaveBeenCalledWith(
-      Buffer.from("video"),
-      Buffer.from("dub"),
-      [{ startSec: 0, endSec: 2 }],
-    );
-    expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
-    expect(remixRender.renderBannerAudioMix).not.toHaveBeenCalled();
-    expect(remixStorage.putRender).toHaveBeenCalledWith(
-      "remake_1",
-      Buffer.from("rendered-mix-mp4"),
-    );
-    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
-      where: { id: "remake_1" },
-      data: {
-        renderOutputKey: "remix/remake_1/render.mp4",
-        renderPhase: "render_ready",
-        renderError: null,
-      },
-    });
-    expect(markCompleted).toHaveBeenCalledWith(prisma, "job_render_mix", {
-      remakeId: "remake_1",
-    });
-  });
-
-  it("remix_render uses persisted ttsAudioMode=mix over env replace", async () => {
-    process.env.REMIX_TTS_AUDIO_MODE = "replace";
-    remixService.getRemake.mockResolvedValue({
-      id: "remake_1",
-      mediaVideoKey: "remix/remake_1/source-video.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
-      renderMode: "audio_only",
-      dubSource: "tts",
-      ttsAudioMode: "mix",
-      sourceTranscriptTranslated: {
-        segments: [{ startSec: 0, endSec: 2, role: "narration" }],
-      },
-    });
-
-    const job = {
-      id: "job_render_persisted_mix",
-      name: "remix_render",
-      data: { remakeId: "remake_1" },
-    } as unknown as BullJob;
-
-    await processor.process(job);
-
-    expect(remixRender.renderAudioMix).toHaveBeenCalled();
-    expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
-  });
-
-  it("remix_render uses persisted ttsAudioMode=replace over env mix", async () => {
-    process.env.REMIX_TTS_AUDIO_MODE = "mix";
-    remixService.getRemake.mockResolvedValue({
-      id: "remake_1",
-      mediaVideoKey: "remix/remake_1/source-video.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
-      renderMode: "audio_only",
-      dubSource: "tts",
-      ttsAudioMode: "replace",
-      sourceTranscriptTranslated: {
-        segments: [{ startSec: 0, endSec: 2, role: "narration" }],
-      },
-    });
-
-    const job = {
-      id: "job_render_persisted_replace",
-      name: "remix_render",
-      data: { remakeId: "remake_1" },
-    } as unknown as BullJob;
-
-    await processor.process(job);
-
-    expect(remixRender.renderAudioOnly).toHaveBeenCalled();
-    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
-  });
-
-  it("remix_render falls back to env mix when ttsAudioMode is null", async () => {
-    process.env.REMIX_TTS_AUDIO_MODE = "mix";
-    remixService.getRemake.mockResolvedValue({
-      id: "remake_1",
-      mediaVideoKey: "remix/remake_1/source-video.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
-      renderMode: "audio_only",
-      dubSource: "tts",
-      ttsAudioMode: null,
-      sourceTranscriptTranslated: {
-        segments: [{ startSec: 0, endSec: 2, role: "narration" }],
-      },
-    });
-
-    const job = {
-      id: "job_render_env_mix_fallback",
-      name: "remix_render",
-      data: { remakeId: "remake_1" },
-    } as unknown as BullJob;
-
-    await processor.process(job);
-
-    expect(remixRender.renderAudioMix).toHaveBeenCalled();
-    expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
-  });
-
-  it("remix_render ignores ttsAudioMode=mix when dubSource is upload", async () => {
-    process.env.REMIX_TTS_AUDIO_MODE = "mix";
-    remixService.getRemake.mockResolvedValue({
-      id: "remake_1",
-      mediaVideoKey: "remix/remake_1/source-video.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
-      renderMode: "audio_only",
-      dubSource: "upload",
-      ttsAudioMode: "mix",
-      sourceTranscriptTranslated: {
-        segments: [{ startSec: 0, endSec: 2, role: "narration" }],
-      },
-    });
-
-    const job = {
-      id: "job_render_upload_ignores_mix",
-      name: "remix_render",
-      data: { remakeId: "remake_1" },
-    } as unknown as BullJob;
-
-    await processor.process(job);
-
-    expect(remixRender.renderAudioOnly).toHaveBeenCalled();
-    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
   });
 
   it("remix_render fails clearly when mediaVideoKey or mediaDubAudioKey is missing", async () => {
@@ -558,56 +404,12 @@ describe("RemixProcessor", () => {
       Buffer.from("video"),
       Buffer.from("dub"),
       { header: "Header", bottom: "Bottom" },
+      undefined,
     );
     expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
-    expect(remixRender.renderBannerAudioMix).not.toHaveBeenCalled();
     expect(remixStorage.putRender).toHaveBeenCalledWith(
       "remake_1",
       Buffer.from("rendered-banner-mp4"),
-    );
-    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
-      where: { id: "remake_1" },
-      data: {
-        renderOutputKey: "remix/remake_1/render.mp4",
-        renderPhase: "render_ready",
-        renderError: null,
-      },
-    });
-  });
-
-  it("remix_render (dubSource=tts) mixes and renders banner_audio_mix with merged narration intervals", async () => {
-    remixService.getRemake.mockResolvedValue({
-      id: "remake_1",
-      mediaVideoKey: "remix/remake_1/source-video.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
-      renderMode: "banner_audio",
-      dubSource: "tts",
-      ttsAudioMode: "mix",
-      bannerJson: { header: "Header", bottom: "Bottom" },
-      sourceTranscriptTranslated: {
-        segments: [{ startSec: 5, endSec: 6, role: "narration" }],
-      },
-    });
-
-    const job = {
-      id: "job_render_banner_mix",
-      name: "remix_render",
-      data: { remakeId: "remake_1" },
-    } as unknown as BullJob;
-
-    await processor.process(job);
-
-    expect(remixRender.renderBannerAudioMix).toHaveBeenCalledWith(
-      Buffer.from("video"),
-      Buffer.from("dub"),
-      { header: "Header", bottom: "Bottom" },
-      [{ startSec: 5, endSec: 6 }],
-    );
-    expect(remixRender.renderBannerAudio).not.toHaveBeenCalled();
-    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
-    expect(remixStorage.putRender).toHaveBeenCalledWith(
-      "remake_1",
-      Buffer.from("rendered-banner-mix-mp4"),
     );
     expect(prisma.viralRemake.update).toHaveBeenCalledWith({
       where: { id: "remake_1" },
@@ -638,8 +440,6 @@ describe("RemixProcessor", () => {
 
     expect(remixRender.renderBannerAudio).not.toHaveBeenCalled();
     expect(remixRender.renderAudioOnly).not.toHaveBeenCalled();
-    expect(remixRender.renderBannerAudioMix).not.toHaveBeenCalled();
-    expect(remixRender.renderAudioMix).not.toHaveBeenCalled();
   });
 
   it("marks remake failed and job failed on error", async () => {

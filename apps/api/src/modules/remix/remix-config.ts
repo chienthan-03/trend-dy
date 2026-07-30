@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ServiceUnavailableException } from "@nestjs/common";
-import type { RemixScriptMode, RemixTtsAudioMode } from "@factory/shared";
+import type { RemixScriptMode } from "@factory/shared";
 
 export const getRemixScriptMode = (): RemixScriptMode => {
   const raw = process.env.REMIX_SCRIPT_MODE?.trim().toLowerCase();
@@ -93,26 +93,6 @@ export const resolveEffectiveTtsMaxSpeed = (
   const baseSpeed = resolveTtsSpeed(remakeSpeed);
   const configuredMax = resolveTtsMaxSpeed(remakeMaxSpeed);
   return Math.max(configuredMax, baseSpeed);
-};
-
-/**
- * How TTS dub is mixed into the final render:
- * - `replace` (default): TTS every cue; full soundtrack replace (continuous VI).
- * - `mix`: TTS narration only; duck original under narration (Review / Giữ gốc).
- */
-export type TtsAudioMode = RemixTtsAudioMode;
-
-export const getTtsAudioMode = (): TtsAudioMode => {
-  const raw = process.env.REMIX_TTS_AUDIO_MODE?.trim().toLowerCase();
-  if (raw === "mix") return "mix";
-  return "replace";
-};
-
-export const resolveEffectiveTtsAudioMode = (
-  persisted: string | null | undefined,
-): RemixTtsAudioMode => {
-  if (persisted === "mix" || persisted === "replace") return persisted;
-  return getTtsAudioMode();
 };
 
 export type TtsTimingMode = "sequential" | "hybrid" | "strict";
@@ -419,16 +399,6 @@ export const getRenderFontPath = (): string | undefined => {
     }
   }
   return undefined;
-};
-
-/**
- * Original-track gain during narration windows (0–1, default 0 = mute).
- * Source (film dialogue) windows stay at full volume; only narration is ducked.
- */
-export const getDuckGain = (): number => {
-  const n = Number(process.env.REMIX_DUCK_GAIN ?? "0");
-  if (!Number.isFinite(n)) return 0;
-  return Math.min(1, Math.max(0, n));
 };
 
 export type SttResponseFormat = "verbose_json" | "json";

@@ -380,7 +380,6 @@ const RemakeStudioPage = () => {
                 classifyPending={pending === "classify" || pending === "toggleRole"}
                 classifyWarning={remake.classifyWarning}
                 timingWarning={remake.timingWarning}
-                effectiveTtsAudioMode={remake.effectiveTtsAudioMode}
               />
             </div>
           </Card>

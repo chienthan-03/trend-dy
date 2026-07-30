@@ -1,6 +1,6 @@
 import { IsIn, IsNumber, IsObject, IsOptional, IsString, Max, Min, ValidateIf } from "class-validator";
-import { REMIX_RENDER_MODES, REMIX_TTS_AUDIO_MODES } from "@factory/shared";
-import type { RemixBannerJson, RemixPackageV1, RemixRenderMode, RemixTtsAudioMode } from "@factory/shared";
+import { REMIX_BGM_TRACK_IDS, REMIX_BGM_SPEED_MAX, REMIX_BGM_SPEED_MIN, REMIX_RENDER_MODES, type RemixBgmTrackId } from "@factory/shared";
+import type { RemixBannerJson, RemixPackageV1, RemixRenderMode } from "@factory/shared";
 import {
   TTS_MAX_SPEED_MAX,
   TTS_MAX_SPEED_MIN,
@@ -39,11 +39,31 @@ export class UpdateRemixDto {
   ttsMaxSpeed?: number | null;
 
   @IsOptional()
-  @ValidateIf((_o, value) => value != null)
-  @IsIn([...REMIX_TTS_AUDIO_MODES])
-  ttsAudioMode?: RemixTtsAudioMode | null;
-
-  @IsOptional()
   @IsObject()
   bannerJson?: RemixBannerJson;
+
+  @IsOptional()
+  @ValidateIf((_o, value) => value != null)
+  @IsIn([...REMIX_BGM_TRACK_IDS])
+  bgmTrackId?: RemixBgmTrackId | null;
+
+  @IsOptional()
+  @ValidateIf((_o, value) => value != null)
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  bgmVolume?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_o, value) => value != null)
+  @IsNumber()
+  @Min(REMIX_BGM_SPEED_MIN)
+  @Max(REMIX_BGM_SPEED_MAX)
+  bgmSpeed?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_o, value) => value != null)
+  @IsNumber()
+  @Min(0)
+  bgmStartSec?: number | null;
 }

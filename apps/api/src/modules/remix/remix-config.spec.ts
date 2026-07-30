@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
   assertFullScriptAllowed,
-  getDuckGain,
   getLetterboxRatio,
   getMediaDownloadTimeoutMs,
   getPiperBin,
@@ -20,8 +19,6 @@ import {
   getTtsMaxSpeed,
   resolveTtsMaxSpeed,
   resolveTtsSpeed,
-  getTtsAudioMode,
-  resolveEffectiveTtsAudioMode,
   getTtsTimingMode,
   getTtsMode,
   resolveTtsEngine,
@@ -185,48 +182,6 @@ describe("remix-config", () => {
     }
   });
 
-  it("defaults duck gain to 0 (mute original under narration)", () => {
-    delete process.env.REMIX_DUCK_GAIN;
-    expect(getDuckGain()).toBe(0);
-  });
-
-  it("defaults TTS audio mode to replace (continuous VI)", () => {
-    delete process.env.REMIX_TTS_AUDIO_MODE;
-    expect(getTtsAudioMode()).toBe("replace");
-  });
-
-  it("reads mix TTS audio mode from env", () => {
-    process.env.REMIX_TTS_AUDIO_MODE = "mix";
-    expect(getTtsAudioMode()).toBe("mix");
-  });
-
-  it("treats unknown TTS audio mode values as replace", () => {
-    process.env.REMIX_TTS_AUDIO_MODE = "weird";
-    expect(getTtsAudioMode()).toBe("replace");
-  });
-
-  describe("resolveEffectiveTtsAudioMode", () => {
-    it("returns replace when persisted is replace", () => {
-      process.env.REMIX_TTS_AUDIO_MODE = "mix";
-      expect(resolveEffectiveTtsAudioMode("replace")).toBe("replace");
-    });
-
-    it("returns mix when persisted is mix", () => {
-      process.env.REMIX_TTS_AUDIO_MODE = "replace";
-      expect(resolveEffectiveTtsAudioMode("mix")).toBe("mix");
-    });
-
-    it("falls back to env when persisted is null", () => {
-      process.env.REMIX_TTS_AUDIO_MODE = "mix";
-      expect(resolveEffectiveTtsAudioMode(null)).toBe("mix");
-    });
-
-    it("falls back to env replace when persisted is garbage", () => {
-      process.env.REMIX_TTS_AUDIO_MODE = "replace";
-      expect(resolveEffectiveTtsAudioMode("weird")).toBe("replace");
-    });
-  });
-
   it("defaults TTS timing mode to sequential", () => {
     delete process.env.REMIX_TTS_TIMING_MODE;
     expect(getTtsTimingMode()).toBe("sequential");
@@ -245,27 +200,6 @@ describe("remix-config", () => {
   it("falls back to sequential for unknown timing mode", () => {
     process.env.REMIX_TTS_TIMING_MODE = "elastic";
     expect(getTtsTimingMode()).toBe("sequential");
-  });
-
-  it("reads duck gain from env", () => {
-    process.env.REMIX_DUCK_GAIN = "0.3";
-    expect(getDuckGain()).toBe(0.3);
-  });
-
-  it("clamps duck gain to the 0–1 range", () => {
-    process.env.REMIX_DUCK_GAIN = "0";
-    expect(getDuckGain()).toBe(0);
-
-    process.env.REMIX_DUCK_GAIN = "-1";
-    expect(getDuckGain()).toBe(0);
-
-    process.env.REMIX_DUCK_GAIN = "2";
-    expect(getDuckGain()).toBe(1);
-  });
-
-  it("falls back to default duck gain for invalid values", () => {
-    process.env.REMIX_DUCK_GAIN = "not-a-number";
-    expect(getDuckGain()).toBe(0);
   });
 
   it("defaults TTS mode to fake", () => {

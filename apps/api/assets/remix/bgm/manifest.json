@@ -1,0 +1,10 @@
+{
+  "tracks": [
+    { "id": "bad-style-time-back", "label": "Bad Style — Time Back", "file": "bad-style-time-back.mp3" },
+    { "id": "asphyxia", "label": "Asphyxia (逆時針向)", "file": "asphyxia.mp3" },
+    { "id": "xomu-lanterns", "label": "Xomu — Lanterns", "file": "xomu-lanterns.mp3" },
+    { "id": "late-night-melancholy", "label": "Late Night Melancholy", "file": "late-night-melancholy.mp3" },
+    { "id": "else-paris", "label": "Else — Paris", "file": "else-paris.mp3" },
+    { "id": "shiverr-whize", "label": "Shiverr — Whize", "file": "shiverr-whize.mp3" }
+  ]
+}

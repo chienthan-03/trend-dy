@@ -5,6 +5,7 @@ import { ImportModule } from "../import/import.module";
 import { JobsModule } from "../jobs/jobs.module";
 import { PromptsModule } from "../prompts/prompts.module";
 import { RemixController } from "./remix.controller";
+import { RemixBgmService } from "./remix-bgm.service";
 import { RemixExportService } from "./remix-export.service";
 import { RemixPolicyGuard } from "./remix-policy.guard";
 import { RemixRenderService } from "./remix-render.service";
@@ -19,6 +20,7 @@ import { isMediaDownloadAllowed } from "./remix-config";
   controllers: [RemixController],
   providers: [
     RemixService,
+    RemixBgmService,
     RemixExportService,
     RemixPolicyGuard,
     RemixRenderService,
@@ -27,6 +29,7 @@ import { isMediaDownloadAllowed } from "./remix-config";
   ],
   exports: [
     RemixService,
+    RemixBgmService,
     RemixExportService,
     RemixPolicyGuard,
     RemixRenderService,

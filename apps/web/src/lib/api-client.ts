@@ -1,12 +1,13 @@
 import type {
   RemixBannerJson,
+  RemixBgmTrack,
+  RemixBgmTrackId,
   RemixDubSource,
   RemixPackageV1,
   RemixRenderMode,
   RemixRenderPhase,
   RemixSegmentRole,
   RemixTranscriptV1,
-  RemixTtsAudioMode,
 } from "@factory/shared";
 
 const API_BASE = "/api/v1";
@@ -162,11 +163,13 @@ export type ViralRemake = {
   ttsSpeed: number;
   ttsMaxSpeed: number | null;
   ttsEngine?: "piper" | "live" | null;
-  ttsAudioMode: RemixTtsAudioMode | null;
-  effectiveTtsAudioMode: RemixTtsAudioMode;
   ttsFitFailedIndexes: number[];
   classifyWarning?: string | null;
   timingWarning?: string | null;
+  bgmTrackId?: RemixBgmTrackId | null;
+  bgmVolume?: number | null;
+  bgmSpeed?: number | null;
+  bgmStartSec?: number | null;
 };
 
 export type RemixTriggerResult = {
@@ -423,8 +426,11 @@ export const api = {
         ttsVoiceId?: string;
         ttsSpeed?: number;
         ttsMaxSpeed?: number | null;
-        ttsAudioMode?: RemixTtsAudioMode | null;
         bannerJson?: RemixBannerJson;
+        bgmTrackId?: RemixBgmTrackId | null;
+        bgmVolume?: number | null;
+        bgmSpeed?: number | null;
+        bgmStartSec?: number | null;
       },
     ) =>
       apiFetch<ViralRemake>(`/viral/remix/${id}`, {
@@ -502,6 +508,9 @@ export const api = {
       apiFetch<RemixTriggerResult>(`/viral/remix/${id}/render`, {
         method: "POST",
       }),
+    listBgm: () => apiFetch<{ tracks: RemixBgmTrack[] }>("/viral/remix/bgm"),
+    getBgmPreviewUrl: (trackId: RemixBgmTrackId) =>
+      `${API_BASE}/viral/remix/bgm/${trackId}/preview`,
     getRenderUrl: (id: string, options?: { download?: boolean }) =>
       `${API_BASE}/viral/remix/${id}/render${options?.download ? "?download=1" : ""}`,
   },

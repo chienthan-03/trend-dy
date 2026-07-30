@@ -1269,89 +1269,43 @@ describe("RemixService.updateRemake", () => {
     });
   });
 
-  it("persists ttsAudioMode and invalidates dub/render when mode changes (null -> mix)", async () => {
+  it("persists bgmTrackId and invalidates render only when track changes", async () => {
     prisma.viralRemake.findUnique.mockResolvedValue({
       id: "remake_1",
-      ttsAudioMode: null,
+      mediaDubAudioKey: "remix/remake_1/dub.mp3",
       renderOutputKey: "remix/remake_1/render.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      renderPhase: "render_ready",
+      bgmTrackId: null,
+      bgmVolume: null,
     });
 
-    await service.updateRemake("remake_1", { ttsAudioMode: "mix" });
+    await service.updateRemake("remake_1", { bgmTrackId: "else-paris" });
 
     expect(prisma.viralRemake.update).toHaveBeenCalledWith({
       where: { id: "remake_1" },
       data: {
-        ttsAudioMode: "mix",
-        ...invalidateDubAndRenderData,
+        bgmTrackId: "else-paris",
+        renderOutputKey: null,
+        renderPhase: "tts_ready",
+        renderError: null,
       },
     });
   });
 
-  it("does not invalidate when ttsAudioMode unchanged (mix -> mix)", async () => {
+  it("does not invalidate render when bgmTrackId unchanged", async () => {
     prisma.viralRemake.findUnique.mockResolvedValue({
       id: "remake_1",
-      ttsAudioMode: "mix",
+      mediaDubAudioKey: "remix/remake_1/dub.mp3",
       renderOutputKey: "remix/remake_1/render.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
+      bgmTrackId: "else-paris",
+      bgmVolume: 0.3,
     });
 
-    await service.updateRemake("remake_1", { ttsAudioMode: "mix" });
+    await service.updateRemake("remake_1", { bgmTrackId: "else-paris" });
 
     expect(prisma.viralRemake.update).toHaveBeenCalledWith({
       where: { id: "remake_1" },
-      data: { ttsAudioMode: "mix" },
+      data: { bgmTrackId: "else-paris" },
     });
-  });
-
-  it("allows clearing ttsAudioMode to null (follow env) and invalidates", async () => {
-    prisma.viralRemake.findUnique.mockResolvedValue({
-      id: "remake_1",
-      ttsAudioMode: "mix",
-      renderOutputKey: "remix/remake_1/render.mp4",
-      mediaDubAudioKey: "remix/remake_1/dub-audio.mp3",
-    });
-
-    await service.updateRemake("remake_1", { ttsAudioMode: null });
-
-    expect(prisma.viralRemake.update).toHaveBeenCalledWith({
-      where: { id: "remake_1" },
-      data: {
-        ttsAudioMode: null,
-        ...invalidateDubAndRenderData,
-      },
-    });
-  });
-});
-
-describe("RemixService.enrichRemake", () => {
-  let service: RemixService;
-  let previousTtsAudioMode: string | undefined;
-
-  beforeEach(() => {
-    previousTtsAudioMode = process.env.REMIX_TTS_AUDIO_MODE;
-    service = new RemixService(
-      {} as PrismaService,
-      {} as JobsService,
-      {} as RemixStorageService,
-    );
-  });
-
-  afterEach(() => {
-    if (previousTtsAudioMode === undefined) {
-      delete process.env.REMIX_TTS_AUDIO_MODE;
-    } else {
-      process.env.REMIX_TTS_AUDIO_MODE = previousTtsAudioMode;
-    }
-  });
-
-  it("resolves null ttsAudioMode from env", () => {
-    process.env.REMIX_TTS_AUDIO_MODE = "mix";
-
-    const enriched = service.enrichRemake({
-      ttsAudioMode: null,
-    } as Parameters<RemixService["enrichRemake"]>[0]);
-
-    expect(enriched.effectiveTtsAudioMode).toBe("mix");
   });
 });

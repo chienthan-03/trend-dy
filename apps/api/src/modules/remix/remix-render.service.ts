@@ -3,9 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Injectable } from "@nestjs/common";
 import type { RemixBannerJson } from "@factory/shared";
-import { probeHasAudioStream, probeVideoDimensions, runFfmpeg } from "./remix-audio.util";
-import { getDuckGain, getLetterboxRatio, getRenderFontPath } from "./remix-config";
-import { buildDuckVolumeFilter, type DuckInterval } from "./tts/duck-envelope";
+import { probeVideoDimensions, runFfmpeg } from "./remix-audio.util";
+import { buildBgmMixFilterComplex } from "./remix-bgm-mix";
+import { getLetterboxRatio, getRenderFontPath } from "./remix-config";
+
+export type BgmMixInput = {
+  buffer: Buffer;
+  volume: number;
+  speed: number;
+  startSec: number;
+};
 
 const getFfmpegPath = (): string => process.env.FFMPEG_PATH ?? "ffmpeg";
 
@@ -72,12 +79,13 @@ export class RemixRenderService {
   async renderAudioOnly(
     videoBuffer: Buffer,
     dubAudioBuffer: Buffer,
+    bgm?: BgmMixInput,
   ): Promise<Buffer> {
     if (isFakeRenderMode()) {
       return MINIMAL_MP4;
     }
 
-    return this.renderAudioOnlyWithFfmpeg(videoBuffer, dubAudioBuffer);
+    return this.renderAudioOnlyWithFfmpeg(videoBuffer, dubAudioBuffer, bgm);
   }
 
   /** Pad video with top/bottom letterbox bars, draw header/bottom text, and swap in the dub track. */
@@ -85,86 +93,86 @@ export class RemixRenderService {
     videoBuffer: Buffer,
     dubAudioBuffer: Buffer,
     banners: RemixBannerJson,
+    bgm?: BgmMixInput,
   ): Promise<Buffer> {
     if (isFakeRenderMode()) {
       return MINIMAL_MP4_BANNER;
     }
 
-    return this.renderBannerAudioWithFfmpeg(videoBuffer, dubAudioBuffer, banners);
-  }
-
-  /**
-   * Mix the dub track under the original video's own audio, ducking the
-   * original whenever a narration window plays so the dub stays audible.
-   * Used for `dubSource: "tts"` remakes, where the TTS dub only covers
-   * narration lines and silence elsewhere — the source audio otherwise
-   * carries the rest of the track.
-   */
-  async renderAudioMix(
-    videoBuffer: Buffer,
-    dubAudioBuffer: Buffer,
-    narrationIntervals: DuckInterval[],
-  ): Promise<Buffer> {
-    if (isFakeRenderMode()) {
-      return MINIMAL_MP4;
-    }
-
-    return this.renderAudioMixWithFfmpeg(videoBuffer, dubAudioBuffer, narrationIntervals);
-  }
-
-  /** Same mix as `renderAudioMix`, plus the letterbox banner overlay. */
-  async renderBannerAudioMix(
-    videoBuffer: Buffer,
-    dubAudioBuffer: Buffer,
-    banners: RemixBannerJson,
-    narrationIntervals: DuckInterval[],
-  ): Promise<Buffer> {
-    if (isFakeRenderMode()) {
-      return MINIMAL_MP4_BANNER;
-    }
-
-    return this.renderBannerAudioMixWithFfmpeg(
-      videoBuffer,
-      dubAudioBuffer,
-      banners,
-      narrationIntervals,
-    );
+    return this.renderBannerAudioWithFfmpeg(videoBuffer, dubAudioBuffer, banners, bgm);
   }
 
   private async renderAudioOnlyWithFfmpeg(
     videoBuffer: Buffer,
     dubAudioBuffer: Buffer,
+    bgm?: BgmMixInput,
   ): Promise<Buffer> {
     const ffmpeg = getFfmpegPath();
     const dir = await mkdtemp(join(tmpdir(), "remix-render-"));
     const videoPath = join(dir, "input.mp4");
     const audioPath = join(dir, "dub.mp3");
+    const bgmPath = join(dir, "bgm.mp3");
     const outputPath = join(dir, "output.mp4");
 
     try {
       await writeFile(videoPath, videoBuffer);
       await writeFile(audioPath, dubAudioBuffer);
-      await runFfmpeg(ffmpeg, [
-        "-y",
-        "-i",
-        videoPath,
-        "-i",
-        audioPath,
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-movflags",
-        "+faststart",
-        "-shortest",
-        "-f",
-        "mp4",
-        outputPath,
-      ]);
+
+      if (bgm) {
+        await writeFile(bgmPath, bgm.buffer);
+        const filter = buildBgmMixFilterComplex({
+          volume: bgm.volume,
+          speed: bgm.speed,
+          startSec: bgm.startSec,
+        });
+        await runFfmpeg(ffmpeg, [
+          "-y",
+          "-i",
+          videoPath,
+          "-i",
+          audioPath,
+          "-i",
+          bgmPath,
+          "-filter_complex",
+          filter,
+          "-map",
+          "0:v:0",
+          "-map",
+          "[aout]",
+          "-c:v",
+          "copy",
+          "-c:a",
+          "aac",
+          "-movflags",
+          "+faststart",
+          "-shortest",
+          "-f",
+          "mp4",
+          outputPath,
+        ]);
+      } else {
+        await runFfmpeg(ffmpeg, [
+          "-y",
+          "-i",
+          videoPath,
+          "-i",
+          audioPath,
+          "-map",
+          "0:v:0",
+          "-map",
+          "1:a:0",
+          "-c:v",
+          "copy",
+          "-c:a",
+          "aac",
+          "-movflags",
+          "+faststart",
+          "-shortest",
+          "-f",
+          "mp4",
+          outputPath,
+        ]);
+      }
       return await readFile(outputPath);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -175,11 +183,13 @@ export class RemixRenderService {
     videoBuffer: Buffer,
     dubAudioBuffer: Buffer,
     banners: RemixBannerJson,
+    bgm?: BgmMixInput,
   ): Promise<Buffer> {
     const ffmpeg = getFfmpegPath();
     const dir = await mkdtemp(join(tmpdir(), "remix-render-banner-"));
     const videoPath = join(dir, "input.mp4");
     const audioPath = join(dir, "dub.mp3");
+    const bgmPath = join(dir, "bgm.mp3");
     const outputPath = join(dir, "output.mp4");
 
     try {
@@ -221,164 +231,33 @@ export class RemixRenderService {
         );
       }
 
+      if (bgm) {
+        await writeFile(bgmPath, bgm.buffer);
+      }
+
       await runFfmpeg(ffmpeg, [
         "-y",
         "-i",
         videoPath,
         "-i",
         audioPath,
+        ...(bgm ? ["-i", bgmPath] : []),
         "-filter:v",
         filters.join(","),
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-crf",
-        "23",
-        "-c:a",
-        "aac",
-        "-movflags",
-        "+faststart",
-        "-shortest",
-        "-f",
-        "mp4",
-        outputPath,
-      ]);
-      return await readFile(outputPath);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  }
-
-  private async renderAudioMixWithFfmpeg(
-    videoBuffer: Buffer,
-    dubAudioBuffer: Buffer,
-    narrationIntervals: DuckInterval[],
-  ): Promise<Buffer> {
-    if (!(await probeHasAudioStream(videoBuffer))) {
-      throw new Error(
-        "Source video has no audio track to mix with the TTS dub",
-      );
-    }
-
-    const ffmpeg = getFfmpegPath();
-    const dir = await mkdtemp(join(tmpdir(), "remix-render-mix-"));
-    const videoPath = join(dir, "input.mp4");
-    const audioPath = join(dir, "dub.mp3");
-    const outputPath = join(dir, "output.mp4");
-
-    try {
-      await writeFile(videoPath, videoBuffer);
-      await writeFile(audioPath, dubAudioBuffer);
-
-      const filterComplex = buildAudioMixFilterComplex(narrationIntervals);
-
-      await runFfmpeg(ffmpeg, [
-        "-y",
-        "-i",
-        videoPath,
-        "-i",
-        audioPath,
-        "-filter_complex",
-        filterComplex,
-        "-map",
-        "0:v:0",
-        "-map",
-        "[aout]",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-shortest",
-        "-f",
-        "mp4",
-        outputPath,
-      ]);
-      return await readFile(outputPath);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  }
-
-  private async renderBannerAudioMixWithFfmpeg(
-    videoBuffer: Buffer,
-    dubAudioBuffer: Buffer,
-    banners: RemixBannerJson,
-    narrationIntervals: DuckInterval[],
-  ): Promise<Buffer> {
-    if (!(await probeHasAudioStream(videoBuffer))) {
-      throw new Error(
-        "Source video has no audio track to mix with the TTS dub",
-      );
-    }
-
-    const ffmpeg = getFfmpegPath();
-    const dir = await mkdtemp(join(tmpdir(), "remix-render-banner-mix-"));
-    const videoPath = join(dir, "input.mp4");
-    const audioPath = join(dir, "dub.mp3");
-    const outputPath = join(dir, "output.mp4");
-
-    try {
-      await writeFile(videoPath, videoBuffer);
-      await writeFile(audioPath, dubAudioBuffer);
-
-      const dimensions = await probeVideoDimensions(videoBuffer);
-      const sourceHeight = dimensions?.height ?? DEFAULT_SOURCE_HEIGHT;
-      const ratio = getLetterboxRatio();
-      const barHeight = Math.max(1, Math.round(sourceHeight * ratio));
-      const paddedHeight = sourceHeight + barHeight * 2;
-      const fontSize = Math.max(12, Math.round(barHeight * 0.5));
-      const header = banners.header.trim();
-      const bottom = banners.bottom.trim();
-      const fontPath =
-        header || bottom ? requireBannerFontPath() : undefined;
-
-      const videoFilters = [`pad=iw:${paddedHeight}:0:${barHeight}:black`];
-
-      if (header && fontPath) {
-        videoFilters.push(
-          buildDrawtextFilter({
-            text: header,
-            fontPath,
-            fontSize,
-            y: `(${barHeight}-text_h)/2`,
-          }),
-        );
-      }
-
-      if (bottom && fontPath) {
-        videoFilters.push(
-          buildDrawtextFilter({
-            text: bottom,
-            fontPath,
-            fontSize,
-            y: `${sourceHeight + barHeight}+(${barHeight}-text_h)/2`,
-          }),
-        );
-      }
-
-      const videoChain = `[0:v]${videoFilters.join(",")}[vout]`;
-      const audioChain = buildAudioMixFilterComplex(narrationIntervals, {
-        emitLabel: "aout",
-      });
-      const filterComplex = `${videoChain};${audioChain}`;
-
-      await runFfmpeg(ffmpeg, [
-        "-y",
-        "-i",
-        videoPath,
-        "-i",
-        audioPath,
-        "-filter_complex",
-        filterComplex,
-        "-map",
-        "[vout]",
-        "-map",
-        "[aout]",
+        ...(bgm
+          ? [
+              "-filter_complex",
+              buildBgmMixFilterComplex({
+                volume: bgm.volume,
+                speed: bgm.speed,
+                startSec: bgm.startSec,
+              }),
+              "-map",
+              "0:v:0",
+              "-map",
+              "[aout]",
+            ]
+          : ["-map", "0:v:0", "-map", "1:a:0"]),
         "-c:v",
         "libx264",
         "-preset",
@@ -400,23 +279,3 @@ export class RemixRenderService {
     }
   }
 }
-
-/**
- * `[0:a]VOLUME_EXPR[orig];[orig][1:a]amix=...[aout]` — duck the original
- * track's volume during narration windows, then mix it with the dub.
- * `normalize=0` keeps both inputs at full weight (no post-mix `loudnorm`);
- * the TTS dub is expected to already be at broadcast level.
- */
-const buildAudioMixFilterComplex = (
-  narrationIntervals: DuckInterval[],
-  options: { emitLabel?: string } = {},
-): string => {
-  const emitLabel = options.emitLabel ?? "aout";
-  const duckGain = getDuckGain();
-  const volumeExpr = buildDuckVolumeFilter({
-    intervals: narrationIntervals,
-    duckGain,
-  });
-
-  return `[0:a]${volumeExpr}[orig];[orig][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[${emitLabel}]`;
-};

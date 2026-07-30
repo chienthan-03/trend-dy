@@ -31,7 +31,6 @@ import {
   getDubMaxUploadMb,
   getRemixScriptMode,
   isMediaDownloadAllowed,
-  resolveEffectiveTtsAudioMode,
   resolveTtsEngine,
 } from "./remix-config";
 import { RemixStorageService } from "./remix-storage.service";
@@ -52,10 +51,6 @@ export type TriggerRemixInput = {
 export type TriggerRemixResult = {
   remakeId: string;
   jobId: string;
-};
-
-export type ViralRemakeApi = ViralRemake & {
-  effectiveTtsAudioMode: "replace" | "mix";
 };
 
 export type ListRemakesFilters = {
@@ -88,6 +83,13 @@ export type SegmentRolePatch = {
   role: RemixSegmentRole;
 };
 
+/** Clears render output so a stale MP4 never survives BGM or banner tweaks. */
+export const invalidateRenderOnly = (hasDub: boolean) => ({
+  renderOutputKey: null,
+  renderPhase: hasDub ? "tts_ready" : "idle",
+  renderError: null,
+});
+
 /** Clears anything downstream of the translated transcript so a stale dub/render never survives a role or text change. */
 export const invalidateDubAndRenderData = {
   mediaDubAudioKey: null,
@@ -119,13 +121,6 @@ export class RemixService {
     private readonly jobsService: JobsService,
     private readonly remixStorage: RemixStorageService,
   ) {}
-
-  enrichRemake(remake: ViralRemake): ViralRemakeApi {
-    return {
-      ...remake,
-      effectiveTtsAudioMode: resolveEffectiveTtsAudioMode(remake.ttsAudioMode),
-    };
-  }
 
   async triggerRemix(input: TriggerRemixInput): Promise<TriggerRemixResult> {
     if (!isRemixEnabled()) {
@@ -238,27 +233,32 @@ export class RemixService {
     if (dto.ttsMaxSpeed !== undefined) {
       data.ttsMaxSpeed = dto.ttsMaxSpeed;
     }
-    if (dto.ttsAudioMode !== undefined) {
-      data.ttsAudioMode = dto.ttsAudioMode;
-    }
     if (dto.bannerJson !== undefined) {
       data.bannerJson = dto.bannerJson as Prisma.InputJsonValue;
     }
-
-    const modeChanged =
-      dto.ttsAudioMode !== undefined &&
-      dto.ttsAudioMode !== existing.ttsAudioMode;
+    if (dto.bgmTrackId !== undefined) {
+      data.bgmTrackId = dto.bgmTrackId;
+    }
+    if (dto.bgmVolume !== undefined) {
+      data.bgmVolume = dto.bgmVolume;
+    }
+    if (dto.bgmSpeed !== undefined) {
+      data.bgmSpeed = dto.bgmSpeed;
+    }
+    if (dto.bgmStartSec !== undefined) {
+      data.bgmStartSec = dto.bgmStartSec;
+    }
 
     const invalidatesRender =
       (dto.renderMode !== undefined && dto.renderMode !== existing.renderMode) ||
-      dto.bannerJson !== undefined;
+      dto.bannerJson !== undefined ||
+      (dto.bgmTrackId !== undefined && dto.bgmTrackId !== existing.bgmTrackId) ||
+      (dto.bgmVolume !== undefined && dto.bgmVolume !== existing.bgmVolume) ||
+      (dto.bgmSpeed !== undefined && dto.bgmSpeed !== existing.bgmSpeed) ||
+      (dto.bgmStartSec !== undefined && dto.bgmStartSec !== existing.bgmStartSec);
 
-    if (modeChanged) {
-      Object.assign(data, invalidateDubAndRenderData);
-    } else if (invalidatesRender && existing.renderOutputKey) {
-      data.renderOutputKey = null;
-      data.renderPhase = existing.mediaDubAudioKey ? "tts_ready" : "idle";
-      data.renderError = null;
+    if (invalidatesRender && existing.renderOutputKey) {
+      Object.assign(data, invalidateRenderOnly(Boolean(existing.mediaDubAudioKey)));
     }
 
     return this.prisma.viralRemake.update({ where: { id }, data });

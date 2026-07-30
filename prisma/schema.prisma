@@ -180,7 +180,6 @@ model ViralRemake {
   mediaVideoKey              String?   @map("media_video_key")
   mediaDubAudioKey           String?   @map("media_dub_audio_key")
   dubSource                  String?   @map("dub_source") // tts | upload
-  ttsAudioMode               String?   @map("tts_audio_mode") // replace | mix | null → env
   renderMode                 String    @default("audio_only") @map("render_mode")
   renderPhase                String    @default("idle") @map("render_phase")
   bannerJson                 Json?     @map("banner_json")
@@ -192,6 +191,10 @@ model ViralRemake {
   ttsCostUsd                 Float?    @map("tts_cost_usd")
   ttsFitFailedIndexes        Int[]     @default([]) @map("tts_fit_failed_indexes")
   renderError                String?   @map("render_error")
+  bgmTrackId                 String?   @map("bgm_track_id")
+  bgmVolume                  Float?    @map("bgm_volume")
+  bgmSpeed                   Float?    @map("bgm_speed")
+  bgmStartSec                Float?    @map("bgm_start_sec")
   classifyWarning    String?   @map("classify_warning")
   timingWarning      String?   @map("timing_warning")
   mediaExpiresAt     DateTime? @map("media_expires_at")

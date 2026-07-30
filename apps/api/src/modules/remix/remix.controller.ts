@@ -28,6 +28,7 @@ import { TriggerRemixDto } from "./dto/trigger-remix.dto";
 import { UpdateRemixDto } from "./dto/update-remix.dto";
 import { UpdateSegmentRolesDto } from "./dto/update-segment-roles.dto";
 import { getDubMaxUploadMb } from "./remix-config";
+import { RemixBgmService } from "./remix-bgm.service";
 import { RemixExportService } from "./remix-export.service";
 import { RemixPolicyGuard } from "./remix-policy.guard";
 import { RemixStorageService } from "./remix-storage.service";
@@ -54,6 +55,7 @@ const parseBytesRange = (
 export class RemixController {
   constructor(
     private readonly remixService: RemixService,
+    private readonly remixBgmService: RemixBgmService,
     private readonly remixExportService: RemixExportService,
     private readonly remixPolicyGuard: RemixPolicyGuard,
     private readonly remixStorage: RemixStorageService,
@@ -73,9 +75,41 @@ export class RemixController {
     return this.remixService.listRemakes({ projectId, status, viralItemId });
   }
 
+  @Get("bgm")
+  async listBgmTracks() {
+    const tracks = await this.remixBgmService.listTracks();
+    return { tracks };
+  }
+
+  @Get("bgm/:trackId/preview")
+  async streamBgmPreview(
+    @Param("trackId") trackId: string,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const id = this.remixBgmService.assertTrackId(trackId);
+    const { stream, size } = await this.remixBgmService.getPreviewStream(id);
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Length", String(size));
+
+    const range = parseBytesRange(req.headers.range, size);
+    if (range) {
+      res.status(206);
+      res.setHeader(
+        "Content-Range",
+        `bytes ${range.start}-${range.end}/${size}`,
+      );
+      res.setHeader("Content-Length", String(range.end - range.start + 1));
+    }
+
+    return new StreamableFile(stream);
+  }
+
   @Get(":id")
   async getRemake(@Param("id") id: string) {
-    return this.remixService.enrichRemake(await this.remixService.getRemake(id));
+    return this.remixService.getRemake(id);
   }
 
   @Get(":id/cost-estimate")
@@ -88,9 +122,7 @@ export class RemixController {
 
   @Patch(":id")
   async updateRemake(@Param("id") id: string, @Body() body: UpdateRemixDto) {
-    return this.remixService.enrichRemake(
-      await this.remixService.updateRemake(id, body),
-    );
+    return this.remixService.updateRemake(id, body);
   }
 
   @Post(":id/approve")
@@ -99,14 +131,12 @@ export class RemixController {
       throw new ForbiddenException("Admin role required to approve remix");
     }
 
-    return this.remixService.enrichRemake(
-      await this.remixService.approve(id, req.user.id),
-    );
+    return this.remixService.approve(id, req.user.id);
   }
 
   @Post(":id/reject")
   async rejectRemake(@Param("id") id: string) {
-    return this.remixService.enrichRemake(await this.remixService.reject(id));
+    return this.remixService.reject(id);
   }
 
   @Post(":id/regenerate")
@@ -238,9 +268,7 @@ export class RemixController {
     @Param("id") id: string,
     @Body() body: ClassifySegmentsDto = {},
   ) {
-    return this.remixService.enrichRemake(
-      await this.remixService.classifySegments(id, { mode: body?.mode }),
-    );
+    return this.remixService.classifySegments(id, { mode: body?.mode });
   }
 
   @Patch(":id/transcript/roles")
@@ -248,9 +276,7 @@ export class RemixController {
     @Param("id") id: string,
     @Body() body: UpdateSegmentRolesDto,
   ) {
-    return this.remixService.enrichRemake(
-      await this.remixService.updateSegmentRoles(id, body.roles),
-    );
+    return this.remixService.updateSegmentRoles(id, body.roles);
   }
 
   @Get(":id/export")

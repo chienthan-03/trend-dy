@@ -4,11 +4,11 @@ import type {
   RemixBannerJson,
   RemixRenderMode,
   RemixRenderPhase,
-  RemixTtsAudioMode,
 } from "@factory/shared";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Alert, Badge, Button, Input, Label, Select, Spinner } from "@/components/ui";
 import { costLabelForAction } from "@/components/remix/remake-cost-estimates";
+import { BgmPicker } from "@/components/remix/bgm-picker";
 import {
   api,
   getErrorMessage,
@@ -90,16 +90,6 @@ const resolveInitialEngine = (
   return costEstimate?.defaultTtsEngine ?? "piper";
 };
 
-const TTS_AUDIO_MODE_OPTIONS: Array<{ id: RemixTtsAudioMode; label: string }> = [
-  { id: "replace", label: "Thay toàn bộ audio" },
-  { id: "mix", label: "Giữ nhạc nền (mix)" },
-];
-
-const TTS_AUDIO_MODE_HINTS: Record<RemixTtsAudioMode, string> = {
-  replace: "Chỉ còn giọng VI — mất nhạc/SFX gốc.",
-  mix: "Giữ audio gốc dưới lời VI (duck). Tiếng gốc có thể còn lí nhí. Không tách riêng nhạc. Cần Tạo audio VI lại sau khi đổi mode hoặc đổi Review/Giữ gốc.",
-};
-
 const RENDER_PHASE_LABELS: Record<RemixRenderPhase, string> = {
   idle: "Chưa xử lý",
   tts: "Đang tạo audio VI…",
@@ -140,9 +130,6 @@ export const VideoOutputPanel = ({
   const [renderMode, setRenderMode] = useState<RemixRenderMode>(
     remake.renderMode ?? "audio_only",
   );
-  const [ttsAudioMode, setTtsAudioMode] = useState<RemixTtsAudioMode>(
-    remake.effectiveTtsAudioMode ?? remake.ttsAudioMode ?? "replace",
-  );
   const [voiceId, setVoiceId] = useState<string>(
     remake.ttsVoiceId || VOICE_OPTIONS[0].id,
   );
@@ -167,7 +154,6 @@ export const VideoOutputPanel = ({
     if (remakeIdRef.current === remake.id) return;
     remakeIdRef.current = remake.id;
     setRenderMode(remake.renderMode ?? "audio_only");
-    setTtsAudioMode(remake.effectiveTtsAudioMode ?? remake.ttsAudioMode ?? "replace");
     setVoiceId(remake.ttsVoiceId || VOICE_OPTIONS[0].id);
     setTtsSpeed(resolveTtsSpeedValue(remake));
     setTtsMaxSpeed(resolveTtsMaxSpeedSelectValue(remake));
@@ -196,11 +182,6 @@ export const VideoOutputPanel = ({
   const isBannerMode = renderMode === "banner_audio";
   const isTtsBusy = renderPhase === "tts" || pending === "tts";
   const isRenderBusy = renderPhase === "rendering" || pending === "render";
-  const isTtsAudioModeDisabled =
-    pending === "tts-audio-mode" ||
-    renderPhase === "tts" ||
-    renderPhase === "rendering" ||
-    remake.dubSource === "upload";
   const bannerReady = isBannerMode
     ? Boolean(remake.bannerJson) || Boolean(bannerHeader.trim() && bannerBottom.trim())
     : true;
@@ -235,25 +216,6 @@ export const VideoOutputPanel = ({
     try {
       const updated = await api.remix.update(remake.id, { renderMode: mode });
       onRemakeChange(updated);
-    } catch (err) {
-      onError(getErrorMessage(err));
-    } finally {
-      setPending(null);
-    }
-  };
-
-  const handleTtsAudioModeChange = async (mode: RemixTtsAudioMode) => {
-    setTtsAudioMode(mode);
-    setPending("tts-audio-mode");
-    try {
-      const updated = await api.remix.update(remake.id, { ttsAudioMode: mode });
-      setTtsAudioMode(updated.effectiveTtsAudioMode);
-      onRemakeChange(updated);
-      onInfo(
-        mode === "mix"
-          ? "Đã chọn giữ nhạc nền — tạo lại audio VI trước khi render."
-          : "Đã chọn thay toàn bộ audio — tạo lại audio VI trước khi render.",
-      );
     } catch (err) {
       onError(getErrorMessage(err));
     } finally {
@@ -599,43 +561,11 @@ export const VideoOutputPanel = ({
         </div>
       </fieldset>
 
-      <fieldset className="grid gap-3 rounded border border-gray-200 p-3">
-        <legend className="px-1 text-sm font-medium text-gray-700">
-          Cách ghép audio VI
-        </legend>
-        {remake.dubSource === "upload" ? (
-          <p className="text-xs text-gray-500">
-            Audio tải lên luôn thay toàn bộ track.
-          </p>
-        ) : null}
-        <div
-          className="flex flex-wrap gap-4"
-          role="radiogroup"
-          aria-label="Chế độ ghép audio VI"
-        >
-          {TTS_AUDIO_MODE_OPTIONS.map((option) => (
-            <label
-              key={option.id}
-              className="flex items-center gap-2 text-sm text-gray-700"
-              htmlFor={`tts-audio-mode-${option.id}`}
-            >
-              <input
-                type="radio"
-                id={`tts-audio-mode-${option.id}`}
-                name="tts-audio-mode"
-                value={option.id}
-                checked={ttsAudioMode === option.id}
-                onChange={() => handleTtsAudioModeChange(option.id)}
-                disabled={isTtsAudioModeDisabled}
-                className="h-4 w-4"
-                aria-label={option.label}
-              />
-              {option.label}
-            </label>
-          ))}
-        </div>
-        <p className="text-xs text-gray-500">{TTS_AUDIO_MODE_HINTS[ttsAudioMode]}</p>
-      </fieldset>
+      <BgmPicker
+        remake={remake}
+        onRemakeChange={onRemakeChange}
+        onError={onError}
+      />
 
       <fieldset
         className="grid gap-3 rounded border border-gray-200 p-3"

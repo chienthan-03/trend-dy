@@ -96,9 +96,6 @@ export type RemixSubtitlesV2 = RemixPackageV1["subtitles"] & {
 export const REMIX_RENDER_MODES = ["audio_only", "banner_audio"] as const;
 export type RemixRenderMode = (typeof REMIX_RENDER_MODES)[number];
 
-export const REMIX_TTS_AUDIO_MODES = ["replace", "mix"] as const;
-export type RemixTtsAudioMode = (typeof REMIX_TTS_AUDIO_MODES)[number];
-
 export const REMIX_RENDER_PHASES = [
   "idle",
   "tts",
@@ -115,6 +112,28 @@ export type RemixBannerJson = {
 };
 
 export type RemixDubSource = "tts" | "upload";
+
+export const REMIX_BGM_TRACK_IDS = [
+  "bad-style-time-back",
+  "asphyxia",
+  "xomu-lanterns",
+  "late-night-melancholy",
+  "else-paris",
+  "shiverr-whize",
+] as const;
+export type RemixBgmTrackId = (typeof REMIX_BGM_TRACK_IDS)[number];
+
+export type RemixBgmTrack = {
+  id: RemixBgmTrackId;
+  label: string;
+  previewUrl: string;
+  durationSec: number;
+};
+
+export const REMIX_BGM_DEFAULT_VOLUME = 0.3;
+export const REMIX_BGM_DEFAULT_SPEED = 1;
+export const REMIX_BGM_SPEED_MIN = 0.5;
+export const REMIX_BGM_SPEED_MAX = 2;
 
 export type RemixTtsFitFailure = {
   indexes: number[];

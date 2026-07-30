@@ -38,7 +38,6 @@ interface RemakeTranscriptPanelProps {
   timingWarning?: string | null;
   onRetranscribe?: () => void;
   retranscribePending?: boolean;
-  effectiveTtsAudioMode?: "replace" | "mix";
 }
 
 export const RemakeTranscriptPanel = ({
@@ -57,7 +56,6 @@ export const RemakeTranscriptPanel = ({
   timingWarning,
   onRetranscribe,
   retranscribePending = false,
-  effectiveTtsAudioMode,
 }: RemakeTranscriptPanelProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [view, setView] = useState<TranscriptView>("source");
@@ -194,16 +192,11 @@ export const RemakeTranscriptPanel = ({
 
             {view === "translated" && translatedTranscript ? (
               <div className="space-y-2">
-                {effectiveTtsAudioMode === "mix" ? (
-                  <p className="text-xs text-gray-500">
-                    Mix: chỉ đọc dòng Review; Giữ gốc giữ tiếng gốc + nhạc.
-                  </p>
-                ) : null}
                 <p className="text-xs text-gray-500">
-                  <strong>Review</strong> / <strong>Giữ gốc</strong> là nhãn phân
-                  loại (UI). MVP hiện tại: TTS đọc mọi cue; render duck mọi cửa sổ
-                  cue để tránh double audio. Đổi vai trò vẫn xoá audio VI đã tạo —
-                  cần bấm «Tạo audio VI» lại trước khi render.
+                  <strong>Review</strong> / <strong>Giữ gốc</strong> dùng cho phân loại
+                  và khóa timeline hybrid. Render luôn thay toàn bộ audio bằng giọng VI.
+                  Đổi vai trò vẫn xoá audio VI đã tạo — cần «Tạo audio VI» lại trước khi
+                  render.
                 </p>
                 {classifyWarning ? (
                   <div

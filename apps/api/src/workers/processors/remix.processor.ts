@@ -30,7 +30,6 @@ import {
   getSttLanguageHint,
   getTtsModel,
   getTtsTimingMode,
-  resolveEffectiveTtsAudioMode,
   resolveTtsEngine,
   resolveEffectiveTtsMaxSpeed,
   resolveTtsMaxSpeed,
@@ -62,10 +61,7 @@ import {
 import { finalizeDubTimeline } from "../../modules/remix/tts/finalize-dub-timeline";
 import { planSequentialTimeline } from "../../modules/remix/tts/sequential-timeline";
 import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
-import {
-  effectiveRole,
-  mergeNarrationIntervals,
-} from "../../modules/remix/tts/segment-role";
+import { effectiveRole } from "../../modules/remix/tts/segment-role";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 import {
   readTtsBatchCache,
@@ -77,7 +73,9 @@ import { normalizeVietnameseForTts } from "../../modules/remix/tts/viet-normaliz
 import { probeClipDurationSec } from "../../modules/remix/remix-audio.util";
 
 import { RemixMediaCleanupService } from "../../modules/remix/remix-media-cleanup.service";
-import { RemixRenderService } from "../../modules/remix/remix-render.service";
+import { RemixBgmService } from "../../modules/remix/remix-bgm.service";
+import { resolveBgmSpeed, resolveBgmStartSec, resolveBgmVolume } from "../../modules/remix/remix-bgm-mix";
+import { RemixRenderService, type BgmMixInput } from "../../modules/remix/remix-render.service";
 import { RemixStorageService } from "../../modules/remix/remix-storage.service";
 import {
   invalidateDubAndRenderData,
@@ -187,6 +185,7 @@ export class RemixProcessor extends WorkerHost {
     private readonly remixStorage: RemixStorageService,
     private readonly remixCleanup: RemixMediaCleanupService,
     private readonly remixRender: RemixRenderService,
+    private readonly remixBgmService: RemixBgmService,
   ) {
     super();
   }
@@ -789,12 +788,9 @@ export class RemixProcessor extends WorkerHost {
     >();
     let ttsCostUsd = 0;
 
-    const audioMode = resolveEffectiveTtsAudioMode(remake.ttsAudioMode);
     const timingMode = getTtsTimingMode();
-    const useSequential = timingMode === "sequential" && audioMode === "replace";
-    // Hybrid only applies to full soundtrack replace — `mix` narration-only
-    // dub always pins to the ZH window it ducks under.
-    const useHybrid = timingMode === "hybrid" && audioMode === "replace";
+    const useSequential = timingMode === "sequential";
+    const useHybrid = timingMode === "hybrid";
     const hybridOptions = useHybrid
       ? {
           blockGapSec: getHybridBlockGapSec(),
@@ -815,14 +811,7 @@ export class RemixProcessor extends WorkerHost {
 
     const cues: CueForBatch[] = translated.segments
       .map((segment, index) => ({ segment, index }))
-      .filter(({ segment }) => {
-        if (!segment.text.trim()) return false;
-        // `mix` keeps film-dialogue windows silent on the dub; `replace` speaks every cue.
-        if (audioMode === "mix") {
-          return effectiveRole(segment) === "narration";
-        }
-        return true;
-      })
+      .filter(({ segment }) => Boolean(segment.text.trim()))
       .map(({ segment, index }) => ({
         index,
         text: segment.text,
@@ -1120,45 +1109,43 @@ export class RemixProcessor extends WorkerHost {
         });
       }
 
-      if (audioMode === "replace") {
-        const finalized = await finalizeDubTimeline(
-          [...timelineByIndex.entries()].map(([index, entry]) => {
-            const planned = hybridOutByIndex?.get(index);
-            const raw = rawByIndex.get(index);
-            return {
-              index,
-              plannedStartSec: entry.startSec,
-              fitTargetSec:
-                planned?.fitTargetSec ??
-                Math.max(
-                  (raw?.zhEndSec ?? entry.endSec) -
-                    (raw?.zhStartSec ?? entry.startSec),
-                  0.1,
-                ),
-              locked: planned?.locked ?? !useHybrid,
-              buffer: entry.fittedMp3Buffer,
-            };
-          }),
+      const finalized = await finalizeDubTimeline(
+        [...timelineByIndex.entries()].map(([index, entry]) => {
+          const planned = hybridOutByIndex?.get(index);
+          const raw = rawByIndex.get(index);
+          return {
+            index,
+            plannedStartSec: entry.startSec,
+            fitTargetSec:
+              planned?.fitTargetSec ??
+              Math.max(
+                (raw?.zhEndSec ?? entry.endSec) -
+                  (raw?.zhStartSec ?? entry.startSec),
+                0.1,
+              ),
+            locked: planned?.locked ?? !useHybrid,
+            buffer: entry.fittedMp3Buffer,
+          };
+        }),
+      );
+
+      let deferredCount = 0;
+      for (const entry of finalized) {
+        if (entry.deferred) deferredCount += 1;
+        if (entry.truncated && !fitFailedIndexes.includes(entry.index)) {
+          fitFailedIndexes.push(entry.index);
+        }
+        timelineByIndex.set(entry.index, {
+          startSec: entry.startSec,
+          endSec: entry.endSec,
+          fittedMp3Buffer: entry.buffer,
+        });
+      }
+
+      if (deferredCount > 0) {
+        this.logger.log(
+          `remix_tts ${jobId}: deferred ${deferredCount} cues to prevent overlap`,
         );
-
-        let deferredCount = 0;
-        for (const entry of finalized) {
-          if (entry.deferred) deferredCount += 1;
-          if (entry.truncated && !fitFailedIndexes.includes(entry.index)) {
-            fitFailedIndexes.push(entry.index);
-          }
-          timelineByIndex.set(entry.index, {
-            startSec: entry.startSec,
-            endSec: entry.endSec,
-            fittedMp3Buffer: entry.buffer,
-          });
-        }
-
-        if (deferredCount > 0) {
-          this.logger.log(
-            `remix_tts ${jobId}: deferred ${deferredCount} cues to prevent overlap`,
-          );
-        }
       }
     }
 
@@ -1249,38 +1236,28 @@ export class RemixProcessor extends WorkerHost {
       this.remixStorage.getDub(remake.mediaDubAudioKey),
     ]);
 
-    const audioMode = resolveEffectiveTtsAudioMode(remake.ttsAudioMode);
-    let renderedBuffer: Buffer;
-    if (remake.dubSource === "tts" && audioMode === "mix") {
-      // Narration-only dub: duck original under Review windows; keep film on source.
-      const translated =
-        remake.sourceTranscriptTranslated as RemixTranscriptV1 | null;
-      const duckIntervals = mergeNarrationIntervals(translated?.segments ?? []);
-
-      renderedBuffer =
-        remake.renderMode === "banner_audio"
-          ? await this.remixRender.renderBannerAudioMix(
-              videoBuffer,
-              dubBuffer,
-              remake.bannerJson as RemixBannerJson,
-              duckIntervals,
-            )
-          : await this.remixRender.renderAudioMix(
-              videoBuffer,
-              dubBuffer,
-              duckIntervals,
-            );
-    } else {
-      // TTS replace (default), upload dub, or legacy null dubSource — full replace.
-      renderedBuffer =
-        remake.renderMode === "banner_audio"
-          ? await this.remixRender.renderBannerAudio(
-              videoBuffer,
-              dubBuffer,
-              remake.bannerJson as RemixBannerJson,
-            )
-          : await this.remixRender.renderAudioOnly(videoBuffer, dubBuffer);
+    let bgm: BgmMixInput | undefined;
+    if (remake.bgmTrackId) {
+      const trackId = this.remixBgmService.assertTrackId(remake.bgmTrackId);
+      const buffer = await this.remixBgmService.readTrackBuffer(trackId);
+      const durationSec = await this.remixBgmService.getTrackDurationSec(trackId);
+      bgm = {
+        buffer,
+        volume: resolveBgmVolume(remake.bgmVolume),
+        speed: resolveBgmSpeed(remake.bgmSpeed),
+        startSec: resolveBgmStartSec(remake.bgmStartSec, durationSec),
+      };
     }
+
+    const renderedBuffer =
+      remake.renderMode === "banner_audio"
+        ? await this.remixRender.renderBannerAudio(
+            videoBuffer,
+            dubBuffer,
+            remake.bannerJson as RemixBannerJson,
+            bgm,
+          )
+        : await this.remixRender.renderAudioOnly(videoBuffer, dubBuffer, bgm);
 
     const renderOutputKey = await this.remixStorage.putRender(
       remakeId,
