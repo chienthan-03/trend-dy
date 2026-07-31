@@ -53,7 +53,7 @@ export const getTranslateModel = (): string => {
     return (
       process.env.REMIX_TRANSLATE_LLM_MODEL?.trim() ||
       process.env.LLM_MODEL?.trim() ||
-      "gpt-4o-mini"
+      "openai/gpt-5.6-luna"
     );
   }
 

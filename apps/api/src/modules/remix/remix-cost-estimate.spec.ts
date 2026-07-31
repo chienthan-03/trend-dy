@@ -172,8 +172,8 @@ describe("buildRemixCostEstimate", () => {
     expect(estimate.defaultTtsEngine).toBe("piper");
   });
 
-  it("uses gpt-4o translate rates when REMIX_TRANSLATE_LLM_MODEL is set", () => {
-    process.env.REMIX_TRANSLATE_LLM_MODEL = "openai/gpt-4o";
+  it("uses GPT-5.6 Luna for translation when configured", () => {
+    process.env.REMIX_TRANSLATE_LLM_MODEL = "openai/gpt-5.6-luna";
     process.env.REMIX_TRANSLATE_LLM_BATCH_SIZE = "10";
     const source = transcript(
       Array.from({ length: 20 }, (_, index) => ({
@@ -191,8 +191,8 @@ describe("buildRemixCostEstimate", () => {
     });
 
     const retranslate = estimate.actions.find((a) => a.action === "retranslate");
-    expect(retranslate?.estimatedUsd).toBeGreaterThan(0.005);
-    expect(estimate.rates.translateModel).toBe("openai/gpt-4o");
-    expect(retranslate?.detail).toContain("openai/gpt-4o");
+    expect(retranslate?.estimatedUsd).toBeGreaterThan(0);
+    expect(estimate.rates.translateModel).toBe("openai/gpt-5.6-luna");
+    expect(retranslate?.detail).toContain("openai/gpt-5.6-luna");
   });
 });

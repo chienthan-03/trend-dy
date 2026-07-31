@@ -38,10 +38,11 @@ export const getMediaDownloadTimeoutMs = (): number => {
   return Number.isFinite(n) && n > 0 ? n : 600_000;
 };
 
-/** Whisper multipart upload limit is 25 MB; stay below by default. */
+/** Multipart upload limit; Qwen ASR Flash is limited to 10 MB per request. */
 export const getSttMaxUploadMb = (): number => {
   const n = Number(process.env.REMIX_STT_MAX_UPLOAD_MB ?? "24");
-  return Number.isFinite(n) && n > 0 ? n : 24;
+  const configured = Number.isFinite(n) && n > 0 ? n : 24;
+  return isQwenSttModel() ? Math.min(configured, 10) : configured;
 };
 
 export const getSttAudioBitrateKbps = (): number => {
@@ -248,7 +249,7 @@ export const getTtsCostPer1kCharsUsd = (): number => {
 export const getRemixLlmModel = (): string =>
   process.env.REMIX_LLM_MODEL?.trim() ||
   process.env.LLM_MODEL?.trim() ||
-  "openai/gpt-4o-mini";
+  "openai/gpt-5.6-luna";
 
 export const getDefaultTtsVoiceId = (): string => {
   const configured = process.env.REMIX_TTS_VOICE?.trim();
@@ -316,9 +317,18 @@ export const getDubMaxUploadMb = (): number => {
   return Number.isFinite(n) && n > 0 ? n : 30;
 };
 
-/** OpenRouter: openai/whisper-large-v3-turbo; OpenAI direct: whisper-1 */
+const QWEN_ASR_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+
+/** OpenRouter Qwen ASR Flash; Whisper large-v3 remains a supported alternative. */
 export const getSttModel = (): string =>
-  process.env.REMIX_STT_MODEL?.trim() || "openai/whisper-large-v3-turbo";
+  process.env.REMIX_STT_MODEL?.trim() || QWEN_ASR_MODEL;
+
+const isQwenSttModel = (): boolean =>
+  getSttModel().toLowerCase().includes("qwen3-asr-flash");
+
+/** Qwen ASR Flash accepts synchronous audio requests up to five minutes. */
+export const getSttChunkDurationSec = (): number =>
+  isQwenSttModel() ? 300 : 600;
 
 /** ISO-639-1 hint for Whisper (e.g. zh for Douyin). Empty = auto-detect. */
 export const getSttLanguageHint = (): string | undefined => {
@@ -326,7 +336,7 @@ export const getSttLanguageHint = (): string | undefined => {
   return raw || undefined;
 };
 
-/** Duration-based STT pricing (USD per minute). Turbo ≈ $0.04/hr on OpenRouter/Groq. */
+/** Duration-based STT pricing (USD per minute). */
 export const getSttCostPerMinuteUsd = (): number => {
   const configured = Number(process.env.REMIX_STT_COST_PER_MINUTE_USD);
   if (Number.isFinite(configured) && configured >= 0) {
@@ -339,6 +349,9 @@ export const getSttCostPerMinuteUsd = (): number => {
   }
   if (model.includes("whisper-large-v3")) {
     return 0.111 / 60;
+  }
+  if (model.includes("qwen3-asr-flash")) {
+    return 0.000035 * 60;
   }
   if (model.includes("gpt-4o-mini-transcribe")) {
     return 0.003;
@@ -404,11 +417,21 @@ export const getRenderFontPath = (): string | undefined => {
 export type SttResponseFormat = "verbose_json" | "json";
 
 export const getSttResponseFormat = (): SttResponseFormat => {
+  const model = getSttModel().toLowerCase();
+  const isGpt4oTranscribe =
+    model.includes("gpt-4o") && model.includes("transcribe");
+  const isQwenAsr = model.includes("qwen3-asr-flash");
+
   const raw = process.env.REMIX_STT_RESPONSE_FORMAT?.trim().toLowerCase();
   if (raw === "verbose_json" || raw === "json") {
+    // Qwen and gpt-4o-transcribe return plain JSON text, not Whisper
+    // segment timestamps, on OpenRouter.
+    if ((isGpt4oTranscribe || isQwenAsr) && raw === "verbose_json") {
+      return "json";
+    }
     return raw;
   }
-  // Prefer timed segments for dub sync. OpenRouter OpenAI-compatible Whisper
-  // supports verbose_json; plain json is only for providers that reject it.
-  return "verbose_json";
+  // Prefer timed segments for dub sync. Whisper supports verbose_json;
+  // Qwen and gpt-4o transcribe models only return plain json.
+  return isGpt4oTranscribe || isQwenAsr ? "json" : "verbose_json";
 };

@@ -78,7 +78,7 @@ const sampleTranslatedTranscript = (): RemixTranscriptV1 => ({
   ],
   fullText: "Câu đầu tiên Câu thứ hai",
   provider: "openai",
-  model: "gpt-4o-mini",
+  model: "openai/gpt-5.6-luna",
 });
 
 const collectStream = async (stream: NodeJS.ReadableStream): Promise<Buffer> => {

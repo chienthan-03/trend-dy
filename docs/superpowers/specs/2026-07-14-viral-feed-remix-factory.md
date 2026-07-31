@@ -587,7 +587,7 @@ Next artifact: `docs/superpowers/plans/2026-07-14-viral-feed-remix-phase-a.md` (
 # Phase A
 REMIX_ENABLED=true
 REMIX_DEFAULT_LOCALE=vi
-REMIX_LLM_MODEL=openai/gpt-4o-mini
+REMIX_LLM_MODEL=openai/gpt-5.6-luna
 
 # Phase B
 REMIX_ALLOW_MEDIA_DOWNLOAD=false

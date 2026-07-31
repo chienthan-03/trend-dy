@@ -236,10 +236,11 @@ describe("transcribeAudio", () => {
     expect(result.costUsd).toBeCloseTo(0.00125);
   });
 
-  it("requests verbose_json by default when AI gateway is configured", async () => {
+  it("requests verbose_json for Whisper when AI gateway is configured", async () => {
     process.env.REMIX_STT_MODE = "live";
     process.env.OPENAI_API_KEY = "test-key";
     process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_MODEL = "openai/whisper-large-v3";
     delete process.env.REMIX_STT_API_URL;
     delete process.env.REMIX_STT_RESPONSE_FORMAT;
 
@@ -258,10 +259,92 @@ describe("transcribeAudio", () => {
     expect(result.transcript.segments).toHaveLength(2);
   });
 
+  it("uses Qwen JSON text plus usage duration and cost", async () => {
+    process.env.REMIX_STT_MODE = "live";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+    delete process.env.REMIX_STT_RESPONSE_FORMAT;
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          text: "听到七爷的话，我黯然地低下了头。",
+          usage: {
+            seconds: 4.5,
+            cost: 0.0001575,
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await transcribeAudio(Buffer.from([0xff, 0xfb, 0x90, 0x00]), {
+      languageHint: "zh",
+    });
+
+    const fetchCall = fetchMock.mock.calls[0];
+    const form = fetchCall?.[1]?.body as FormData;
+    expect(form?.get("model")).toBe("qwen/qwen3-asr-flash-2026-02-10");
+    expect(form?.get("response_format")).toBe("json");
+    expect(form?.get("timestamp_granularities[]")).toBeNull();
+    expect(result.transcript.fullText).toContain("七爷");
+    expect(result.transcript.durationSec).toBe(4.5);
+    expect(result.costUsd).toBeCloseTo(0.0001575);
+  });
+
+  it("chunks long Qwen audio at the five-minute provider limit", async () => {
+    process.env.REMIX_STT_MODE = "live";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+    process.env.REMIX_STT_AUDIO_BITRATE_KBPS = "48";
+
+    const audioUtil = await import("../modules/remix/remix-audio.util");
+    const firstChunk = Buffer.alloc(1_801_000, 0);
+    const secondChunk = Buffer.from([0xff, 0xfb, 0x90, 0x00]);
+    firstChunk.write("ID3", 0, "ascii");
+    secondChunk.write("ID3", 0, "ascii");
+    const splitMock = vi
+      .spyOn(audioUtil, "splitMp3ForStt")
+      .mockResolvedValue([firstChunk, secondChunk]);
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "第一段。",
+            usage: { seconds: 300, cost: 0.0105 },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "第二段。",
+            usage: { seconds: 10, cost: 0.00035 },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    const result = await transcribeAudio(firstChunk, { languageHint: "zh" });
+
+    expect(splitMock).toHaveBeenCalledWith(firstChunk, 300);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.transcript.durationSec).toBeCloseTo(310.17, 2);
+    expect(result.transcript.fullText).toContain("第一段");
+    expect(result.transcript.fullText).toContain("第二段");
+    expect(result.costUsd).toBeCloseTo(0.01085);
+  });
+
   it("falls back to json when verbose_json is rejected", async () => {
     process.env.REMIX_STT_MODE = "live";
     process.env.OPENAI_API_KEY = "test-key";
     process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_MODEL = "openai/whisper-large-v3";
     delete process.env.REMIX_STT_API_URL;
     delete process.env.REMIX_STT_RESPONSE_FORMAT;
 

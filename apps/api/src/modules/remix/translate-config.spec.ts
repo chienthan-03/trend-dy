@@ -40,8 +40,14 @@ describe("translate-config", () => {
   });
 
   it("uses configured LLM model by default", () => {
-    process.env.LLM_MODEL = "openai/gpt-4o-mini";
-    expect(getTranslateModel()).toBe("openai/gpt-4o-mini");
+    process.env.LLM_MODEL = "openai/gpt-5.6-luna";
+    expect(getTranslateModel()).toBe("openai/gpt-5.6-luna");
+  });
+
+  it("defaults LLM translation to GPT-5.6 Luna", () => {
+    delete process.env.REMIX_TRANSLATE_LLM_MODEL;
+    delete process.env.LLM_MODEL;
+    expect(getTranslateModel()).toBe("openai/gpt-5.6-luna");
   });
 
   it("uses live llm mode when OpenAI key is present", () => {

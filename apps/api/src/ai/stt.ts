@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RemixTranscriptV1, RemixTranscriptWord } from "@factory/shared";
 import {
+  getSttChunkDurationSec,
   getSttMaxUploadMb,
   getSttApiBaseUrl,
   getSttResponseFormat,
@@ -64,6 +65,10 @@ type WhisperJson = {
     start: number;
     end: number;
   }>;
+  usage?: {
+    seconds?: number;
+    cost?: number;
+  };
 };
 
 type AudioUploadFormat = {
@@ -139,8 +144,11 @@ export const mapWhisperResponseDetailed = (
     .filter((segment) => segment.text.length > 0);
 
   const fullText = payload.text?.trim() ?? segments.map((s) => s.text).join("");
+  const usageDurationSec = payload.usage?.seconds;
   const durationSec =
-    payload.duration ??
+    (Number.isFinite(usageDurationSec) && usageDurationSec! > 0
+      ? usageDurationSec
+      : payload.duration) ??
     (segments.length > 0
       ? segments[segments.length - 1]!.endSec - timeOffsetSec
       : (fallbackDurationSec ?? 0));
@@ -188,12 +196,16 @@ export const mapWhisperResponseDetailed = (
   const timingCoarse = detectCoarseTiming({
     segments: normalized.segments,
     durationSec: transcript.durationSec,
-    degraded: normalized.degraded,
+    degraded:
+      normalized.degraded ||
+      (fullText.length > 0 && (payload.segments?.length ?? 0) === 0),
   });
 
   return {
     transcript,
-    timingDegraded: normalized.degraded,
+    timingDegraded:
+      normalized.degraded ||
+      (fullText.length > 0 && (payload.segments?.length ?? 0) === 0),
     timingCoarse,
   };
 };
@@ -364,9 +376,10 @@ const transcribeWithOpenAi = async (
     fallbackDurationSec,
   );
 
-  const costUsd = estimateSttCostUsd(
-    mapped.transcript.durationSec - timeOffsetSec,
-  );
+  const costUsd =
+    typeof payload.usage?.cost === "number" && payload.usage.cost >= 0
+      ? payload.usage.cost
+      : estimateSttCostUsd(mapped.transcript.durationSec - timeOffsetSec);
 
   logGatewayCall({
     kind: "stt",
@@ -406,8 +419,9 @@ const transcribeWithOpenAi = async (
 const transcribeChunkedMp3 = async (
   mp3Buffer: Buffer,
   languageHint?: string,
+  segmentSec = getSttChunkDurationSec(),
 ): Promise<TranscribeAudioResult> => {
-  const chunks = await splitMp3ForStt(mp3Buffer);
+  const chunks = await splitMp3ForStt(mp3Buffer, segmentSec);
   const model = getSttModel();
   const provider =
     process.env.REMIX_STT_API_URL?.trim() || !process.env.AI_GATEWAY_URL?.trim()
@@ -424,15 +438,21 @@ const transcribeChunkedMp3 = async (
     totalCostUsd += result.costUsd;
     timingDegraded = timingDegraded || Boolean(result.timingDegraded);
 
-    const chunkDuration =
-      result.transcript.segments.length > 0
-        ? result.transcript.segments[result.transcript.segments.length - 1]!
-            .endSec - timeOffsetSec
-        : 0;
+    const transcriptChunkDuration =
+      Math.max(result.transcript.durationSec - timeOffsetSec, 0);
+    const encodedChunkDuration = estimateAudioDurationSec(chunk);
+    const chunkDuration = Math.max(
+      transcriptChunkDuration,
+      encodedChunkDuration,
+    );
     timeOffsetSec += chunkDuration;
   }
 
-  const merged = mergeTranscripts(parts, model, provider);
+  const mergedBase = mergeTranscripts(parts, model, provider);
+  const merged = {
+    ...mergedBase,
+    durationSec: Math.max(mergedBase.durationSec, timeOffsetSec),
+  };
   const renormalized = normalizeCueTiming({
     segments: merged.segments,
     words: merged.words ?? [],
@@ -477,6 +497,10 @@ export const transcribeAudio = async (
   }
 
   if (prepared.length > maxBytes) {
+    return transcribeChunkedMp3(prepared, opts?.languageHint);
+  }
+
+  if (estimateAudioDurationSec(prepared) > getSttChunkDurationSec()) {
     return transcribeChunkedMp3(prepared, opts?.languageHint);
   }
 

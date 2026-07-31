@@ -6,13 +6,16 @@ import {
   getPiperBin,
   getPiperModelDir,
   getPiperModelStem,
+  getRemixLlmModel,
   getRemixScriptMode,
   getRenderFontPath,
   getSmartBatchMaxChars,
   getSmartBatchMaxDurationSec,
   getSmartBatchMaxGapSec,
   getSttCostPerMinuteUsd,
+  getSttChunkDurationSec,
   getSttLanguageHint,
+  getSttMaxUploadMb,
   getSttModel,
   getSttResponseFormat,
   getDefaultTtsSpeed,
@@ -39,6 +42,12 @@ describe("remix-config", () => {
     expect(getRemixScriptMode()).toBe("caption");
   });
 
+  it("defaults Remix LLM to GPT-5.6 Luna", () => {
+    delete process.env.REMIX_LLM_MODEL;
+    delete process.env.LLM_MODEL;
+    expect(getRemixLlmModel()).toBe("openai/gpt-5.6-luna");
+  });
+
   it("rejects full mode without media download", () => {
     process.env.REMIX_SCRIPT_MODE = "full";
     process.env.REMIX_ALLOW_MEDIA_DOWNLOAD = "false";
@@ -58,6 +67,7 @@ describe("remix-config", () => {
 
   it("defaults to verbose_json STT format (including AI gateway)", () => {
     process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_MODEL = "openai/whisper-large-v3";
     delete process.env.REMIX_STT_API_URL;
     delete process.env.REMIX_STT_RESPONSE_FORMAT;
     expect(getSttResponseFormat()).toBe("verbose_json");
@@ -69,9 +79,34 @@ describe("remix-config", () => {
     expect(getSttResponseFormat()).toBe("json");
   });
 
-  it("defaults STT model to OpenRouter turbo", () => {
+  it("forces json for gpt-4o-transcribe (verbose_json rejected by OpenRouter)", () => {
+    process.env.REMIX_STT_MODEL = "openai/gpt-4o-transcribe";
+    process.env.REMIX_STT_RESPONSE_FORMAT = "verbose_json";
+    expect(getSttResponseFormat()).toBe("json");
+  });
+
+  it("defaults gpt-4o-transcribe to json when format unset", () => {
+    process.env.REMIX_STT_MODEL = "openai/gpt-4o-transcribe";
+    delete process.env.REMIX_STT_RESPONSE_FORMAT;
+    expect(getSttResponseFormat()).toBe("json");
+  });
+
+  it("forces json for Qwen ASR because it returns text without Whisper timestamps", () => {
+    process.env.REMIX_STT_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+    process.env.REMIX_STT_RESPONSE_FORMAT = "verbose_json";
+    expect(getSttResponseFormat()).toBe("json");
+  });
+
+  it("defaults STT model to Qwen ASR Flash", () => {
     delete process.env.REMIX_STT_MODEL;
-    expect(getSttModel()).toBe("openai/whisper-large-v3-turbo");
+    expect(getSttModel()).toBe("qwen/qwen3-asr-flash-2026-02-10");
+  });
+
+  it("caps Qwen uploads at 10 MB and chunks them at five minutes", () => {
+    process.env.REMIX_STT_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+    process.env.REMIX_STT_MAX_UPLOAD_MB = "24";
+    expect(getSttMaxUploadMb()).toBe(10);
+    expect(getSttChunkDurationSec()).toBe(300);
   });
 
   it("infers turbo STT cost from model name", () => {
@@ -84,6 +119,12 @@ describe("remix-config", () => {
     process.env.REMIX_STT_MODEL = "openai/whisper-large-v3";
     delete process.env.REMIX_STT_COST_PER_MINUTE_USD;
     expect(getSttCostPerMinuteUsd()).toBeCloseTo(0.111 / 60);
+  });
+
+  it("infers Qwen ASR duration-based cost from model name", () => {
+    process.env.REMIX_STT_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+    delete process.env.REMIX_STT_COST_PER_MINUTE_USD;
+    expect(getSttCostPerMinuteUsd()).toBeCloseTo(0.000035 * 60);
   });
 
   it("reads STT language hint from env", () => {

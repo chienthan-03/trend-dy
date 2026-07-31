@@ -8,10 +8,6 @@ const EMBEDDING_COST_PER_1K_USD = 0.00002;
 /** OpenRouter list prices (USD per 1M tokens → per 1k). */
 const MODEL_LLM_RATES: Array<{ pattern: RegExp; rates: LlmCostRates }> = [
   {
-    pattern: /gpt-4o-mini/,
-    rates: { inputPer1kUsd: 0.00015, outputPer1kUsd: 0.0006 },
-  },
-  {
     pattern: /gpt-4\.1-mini/,
     rates: { inputPer1kUsd: 0.0004, outputPer1kUsd: 0.0016 },
   },
@@ -22,10 +18,6 @@ const MODEL_LLM_RATES: Array<{ pattern: RegExp; rates: LlmCostRates }> = [
   {
     pattern: /gpt-4\.1(?!-mini|-nano)/,
     rates: { inputPer1kUsd: 0.002, outputPer1kUsd: 0.008 },
-  },
-  {
-    pattern: /gpt-4o(?!-mini)/,
-    rates: { inputPer1kUsd: 0.0025, outputPer1kUsd: 0.01 },
   },
   {
     pattern: /claude.*haiku/,

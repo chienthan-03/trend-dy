@@ -187,7 +187,7 @@ export const isPolicyChecklistComplete = (c: RemixPolicyChecklist): boolean =>
 # Phase A — Remix
 REMIX_ENABLED=true
 REMIX_DEFAULT_LOCALE=vi
-REMIX_LLM_MODEL=openai/gpt-4o-mini
+REMIX_LLM_MODEL=openai/gpt-5.6-luna
 REMIX_STUDIO_BRAND=STUDIO ALPHA
 ```
 
