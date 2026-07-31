@@ -5,6 +5,7 @@
 **Audience:** Engineering, AI, product — internal studio tool  
 **Depends on:** [Fine Cue Timing](./2026-07-21-fine-cue-timing-design.md), [Remix Dub + Letterbox Render](./2026-07-17-remix-dub-render-design.md)  
 **Related:** [Narration vs Source Audio Mix](./2026-07-20-remix-narration-source-mix-design.md) (roles retained for UI; MVP still TTS all cues)  
+**Supersedes (partial):** Fine-cue assumption that film beds are empty gaps between narration cues — for bilingual remakes those windows become **VI character TTS cues**, not silence.  
 **Does not use:** Whisper / OpenAI `verbose_json` as the timing source for this path.
 
 **Problem trigger:** Douyin movie-review remakes (e.g. *quán rượu* scene) get contiguous char-proportional cues from Qwen plain JSON. Vietnamese review TTS speaks continuously and never yields time for in-film English dialogue. Editors want real timestamps, bilingual capture (ZH review + EN dialogue), translate both to VI, and TTS both with the same voice.
@@ -92,10 +93,11 @@ Translated transcript must not invent timings.
 ### 5.1 Transport
 
 - Prefer Qwen API that returns timed sentences (`begin_time` / `end_time` in ms, optional `words` when `enable_words`).
-- Likely DashScope async filetrans / OpenAI-compatible endpoint that exposes those fields — **not** the current OpenRouter plain-`json` transcription that only returns `text`.
+- Likely **DashScope** async filetrans / OpenAI-compatible endpoint that exposes those fields — **not** the current OpenRouter plain-`json` transcription that only returns `text`.
+- Timed path requires DashScope (or equivalent timed) credentials; if missing, do not pretend timed mode works — use plain path + `timingWarning`.
 - Config (names illustrative; finalize in plan):
   - `REMIX_STT_MODEL` stays Qwen flash family unless timed endpoint requires a sibling model id.
-  - `REMIX_STT_TIMED=true` (or auto-detect when credentials for timed API exist).
+  - `REMIX_STT_TIMED=true` only when timed credentials are configured; otherwise ignore and fall back.
   - Clear `REMIX_STT_LANGUAGE` for auto; optional dual-pass flags.
 
 ### 5.2 Mapping
@@ -109,10 +111,11 @@ Translated transcript must not invent timings.
 
 ### 5.3 Bilingual strategy
 
-1. **Primary:** one auto-language timed call (no `language=zh`).
-2. **Fallback if EN under-captured:** second timed pass with `language=en`, merge with zh/auto cues by timeline:
+1. **Primary:** one auto-language timed call (no `language=zh`). Persist transcript `language` as `"mixed"` when both CJK and Latin cues exist (avoid stale `"zh"` biasing translate).
+2. **Fallback if EN under-captured:** trigger second timed pass with `language=en` when the primary pass has **zero segments with ≥4 consecutive Latin letters** (content-based, not API language metadata alone). Then merge:
    - Sort by `startSec`.
-   - Drop near-duplicate overlaps (same window, highly similar text / IoU threshold — exact constants in plan).
+   - Drop near-duplicate overlaps (IoU / text-similarity thresholds — exact constants in plan).
+   - Overlap tie-break: prefer the `language=en` pass cue in the contested window (no confidence field assumed).
    - Tag `role`: CJK-heavy → `narration`; Latin/EN → `source` (or LLM classify later; heuristic OK for MVP).
 3. Chunking: respect Qwen sync/async duration limits (existing 300s chunk for flash); re-offset timestamps per chunk as today.
 
@@ -151,7 +154,7 @@ Translated transcript must not invent timings.
 |---|---|
 | Timed Qwen API error / timeout | Log; fall back to current plain STT; set `timingWarning` |
 | Auto pass returns ZH only | Optional EN second pass; if EN pass fails, proceed ZH-only + mild warning |
-| Merge produces overlaps | Prefer higher-confidence / EN-tagged cue in film beds; never leave two TTS clips stacked without resolve |
+| Merge produces overlaps | Prefer EN-pass cue in contested window; never leave two TTS clips stacked without resolve |
 | Translate count mismatch | Existing hard error |
 | TTS / render | Unchanged |
 
@@ -186,4 +189,4 @@ Gateway/OpenRouter-style call logs should record: timed vs plain path, language 
 3. Listening check: review → character VI → review continues without talking over the character window.  
 4. Same TTS voice throughout.  
 5. If timed API is down, studio still completes STT with explicit `timingWarning` (no silent wrong rhythm without signal).
-`)
+)
