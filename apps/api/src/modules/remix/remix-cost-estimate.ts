@@ -12,6 +12,7 @@ import {
   getRemixLlmModel,
   getSttCostPerMinuteUsd,
   getSttModel,
+  isBilingualSttEnabled,
   getTtsCostPer1kCharsUsd,
   getTtsMode,
   getTtsModel,
@@ -172,14 +173,15 @@ export const buildRemixCostEstimate = (input: {
       detail: `REMIX_STT_MODE≠live — $0 · ~${Math.round(durationSec)}s`,
     };
   } else {
-    const usd = roundUsd(estimateSttCostUsd(durationSec));
+    const sttPassCount = isBilingualSttEnabled() ? 2 : 1;
+    const usd = roundUsd(estimateSttCostUsd(durationSec) * sttPassCount);
     retranscribe = {
       action: "retranscribe",
       label: "Transcribe lại (STT)",
       estimatedUsd: usd,
       available: true,
       durationSec,
-      detail: `${getSttModel()} · ~${Math.round(durationSec)}s · $${getSttCostPerMinuteUsd().toFixed(4)}/phút`,
+      detail: `${getSttModel()} · ${sttPassCount} pass${sttPassCount > 1 ? "es" : ""} · ~${Math.round(durationSec)}s · $${getSttCostPerMinuteUsd().toFixed(4)}/phút/pass`,
     };
   }
 

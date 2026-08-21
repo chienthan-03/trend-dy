@@ -31,3 +31,6 @@ apps/api/models/tts/**/*.onnx
 tools/piper/**
 !tools/piper/README.md
 
+# Douyin / yt-dlp session cookies (Netscape cookies.txt)
+secrets/
+

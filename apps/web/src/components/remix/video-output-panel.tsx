@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Alert, Badge, Button, Input, Label, Select, Spinner } from "@/components/ui";
 import { costLabelForAction } from "@/components/remix/remake-cost-estimates";
 import { BgmPicker } from "@/components/remix/bgm-picker";
+import { formatTtsFitWarning } from "@/components/remix/tts-fit-warning";
 import {
   api,
   getErrorMessage,
@@ -431,10 +432,7 @@ export const VideoOutputPanel = ({
         </Alert>
       ) : null}
       {ttsFitFailedIndexes.length > 0 ? (
-        <Alert variant="info">
-          {ttsFitFailedIndexes.length} dòng phụ đề vượt tốc độ đọc tối đa (dòng số{" "}
-          {ttsFitFailedIndexes.join(", ")}) — kiểm tra lại timing trước khi render.
-        </Alert>
+        <Alert variant="info">{formatTtsFitWarning(ttsFitFailedIndexes)}</Alert>
       ) : null}
 
       <fieldset className="grid gap-3 rounded border border-gray-200 p-3">

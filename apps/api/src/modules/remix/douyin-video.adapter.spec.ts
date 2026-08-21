@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDouyinVideoAdapter } from "./douyin-video.adapter";
 import { FakeDouyinVideoAdapter } from "./adapters/fake-douyin-video.adapter";
+import { YtdlpDouyinVideoAdapter } from "./adapters/live/ytdlp-douyin-video.adapter";
 
 describe("FakeDouyinVideoAdapter", () => {
   let previousAdapter: string | undefined;
@@ -66,19 +67,24 @@ describe("FakeDouyinVideoAdapter", () => {
 });
 
 describe("createDouyinVideoAdapter", () => {
+  const env = process.env;
+
+  afterEach(() => {
+    process.env = env;
+  });
+
   it("defaults to the fake adapter", async () => {
-    const previous = process.env.DOUYIN_ADAPTER;
+    process.env = { ...env };
     delete process.env.DOUYIN_ADAPTER;
 
-    try {
-      const adapter = await createDouyinVideoAdapter();
-      expect(adapter).toBeInstanceOf(FakeDouyinVideoAdapter);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.DOUYIN_ADAPTER;
-      } else {
-        process.env.DOUYIN_ADAPTER = previous;
-      }
-    }
+    const adapter = await createDouyinVideoAdapter();
+    expect(adapter).toBeInstanceOf(FakeDouyinVideoAdapter);
+  });
+
+  it("uses yt-dlp when live video provider is ytdlp", async () => {
+    process.env = { ...env, DOUYIN_ADAPTER: "live", DOUYIN_VIDEO_PROVIDER: "ytdlp" };
+
+    const adapter = await createDouyinVideoAdapter();
+    expect(adapter).toBeInstanceOf(YtdlpDouyinVideoAdapter);
   });
 });

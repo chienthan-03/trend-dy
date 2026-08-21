@@ -104,11 +104,26 @@ const { mockGetVideoDetail } = vi.hoisted(() => ({
   mockGetVideoDetail: vi.fn(),
 }));
 
+const { isYtdlpVideoProviderMock, downloadYtdlpVideoMock } = vi.hoisted(() => ({
+  isYtdlpVideoProviderMock: vi.fn(() => false),
+  downloadYtdlpVideoMock: vi.fn().mockResolvedValue({
+    buffer: Buffer.from("ytdlp-video"),
+    contentType: "video/mp4",
+    sizeBytes: 11,
+  }),
+}));
+
 vi.mock("../../modules/remix/douyin-video.adapter", () => ({
   createDouyinVideoAdapter: vi.fn().mockResolvedValue({
     resolveShareUrl: vi.fn(),
     getVideoDetail: mockGetVideoDetail,
   }),
+}));
+
+vi.mock("../../modules/remix/adapters/live/ytdlp-video.provider", () => ({
+  isYtdlpVideoProvider: () => isYtdlpVideoProviderMock(),
+  downloadYtdlpVideo: (...args: unknown[]) =>
+    downloadYtdlpVideoMock(...args),
 }));
 
 const { shortenSegmentTextMock } = vi.hoisted(() => ({
@@ -208,6 +223,12 @@ describe("RemixProcessor (Full Script Mode)", () => {
       stats: {},
       playUrl: "https://play.url/fresh",
       rawPayload: {},
+    });
+    isYtdlpVideoProviderMock.mockReturnValue(false);
+    downloadYtdlpVideoMock.mockResolvedValue({
+      buffer: Buffer.from("ytdlp-video"),
+      contentType: "video/mp4",
+      sizeBytes: 11,
     });
 
     prisma = {
@@ -346,6 +367,39 @@ describe("RemixProcessor (Full Script Mode)", () => {
     });
   });
 
+  it("handleDownloadMedia uses yt-dlp sourceUrl and skips Just One playUrl", async () => {
+    isYtdlpVideoProviderMock.mockReturnValue(true);
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      externalVideoId: "vid_1",
+      sourceUrl: "https://v.douyin.com/abc/",
+      sourceSnapshot: { canonicalUrl: "https://www.douyin.com/video/1" },
+    });
+
+    const { createRemixMediaAdapter } = await import(
+      "../../modules/remix/remix-media.adapter"
+    );
+    const mediaAdapter = await createRemixMediaAdapter();
+
+    const job = {
+      id: "job_download_ytdlp",
+      name: "remix_download_media",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob;
+
+    await processor.process(job);
+
+    expect(downloadYtdlpVideoMock).toHaveBeenCalledWith(
+      "https://v.douyin.com/abc/",
+    );
+    expect(mockGetVideoDetail).not.toHaveBeenCalled();
+    expect(mediaAdapter.downloadFromPlayUrl).not.toHaveBeenCalled();
+    expect(jobsService.enqueue).toHaveBeenCalledWith({
+      type: "remix_stt",
+      payload: { remakeId: "remake_1" },
+    });
+  });
+
   it("handleDownloadMedia backfills video only when transcript already exists", async () => {
     remixService.getRemake.mockResolvedValue({
       id: "remake_1",
@@ -424,6 +478,46 @@ describe("RemixProcessor (Full Script Mode)", () => {
       type: "remix_translate",
       payload: { remakeId: "remake_1", chainGenerate: true },
     });
+  });
+
+  it("persists the OpenRouter bilingual STT warning alongside coarse timing", async () => {
+    remixService.getRemake.mockResolvedValue({
+      id: "remake_1",
+      mediaAudioKey: "remix/remake_1/source-audio.mp3",
+    });
+    vi.mocked(transcribeAudio).mockResolvedValueOnce({
+      transcript: {
+        version: 1,
+        language: "mixed",
+        durationSec: 10,
+        segments: [
+          { startSec: 0, endSec: 5, text: "旁白", role: "narration" },
+          { startSec: 5, endSec: 10, text: "Stop", role: "source" },
+        ],
+        fullText: "旁白 Stop",
+        provider: "gateway",
+        model: "qwen/qwen3-asr-flash-2026-02-10",
+      },
+      costUsd: 0.02,
+      timingDegraded: true,
+      timingCoarse: true,
+      sttWarning:
+        "OpenRouter Qwen dual-pass (auto + English) timing is approximate.",
+    });
+
+    await processor.process({
+      id: "job_stt_warning",
+      name: "remix_stt",
+      data: { remakeId: "remake_1" },
+    } as unknown as BullJob);
+
+    expect(prisma.viralRemake.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          timingWarning: expect.stringContaining("OpenRouter Qwen dual-pass"),
+        }),
+      }),
+    );
   });
 
   it("handleTranslate saves Vietnamese transcript and enqueues generate", async () => {

@@ -31,6 +31,7 @@ describe("buildRemixCostEstimate", () => {
     process.env.REMIX_TTS_BATCH_MODE = "batch";
     process.env.REMIX_TTS_COST_PER_1K_CHARS_USD = "0.06";
     process.env.REMIX_STT_COST_PER_MINUTE_USD = "0.001";
+    delete process.env.REMIX_STT_BILINGUAL;
   });
 
   afterEach(() => {
@@ -63,6 +64,21 @@ describe("buildRemixCostEstimate", () => {
     expect(tts?.batchCount).toBeGreaterThanOrEqual(1);
     expect(tts?.charCount).toBeGreaterThan(0);
     expect(render?.estimatedUsd).toBe(0);
+  });
+
+  it("doubles the STT estimate for the optional English recovery pass", () => {
+    process.env.REMIX_STT_BILINGUAL = "true";
+
+    const estimate = buildRemixCostEstimate({
+      remakeId: "r1",
+      videoDurationSec: 60,
+      sourceTranscript: null,
+      translatedTranscript: null,
+    });
+
+    const stt = estimate.actions.find((a) => a.action === "retranscribe");
+    expect(stt?.estimatedUsd).toBeCloseTo(0.002, 5);
+    expect(stt?.detail).toContain("2 pass");
   });
 
   it("marks TTS unavailable without translated transcript", () => {

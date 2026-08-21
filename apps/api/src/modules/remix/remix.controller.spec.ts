@@ -1,5 +1,7 @@
-import { BadRequestException, ForbiddenException, NotFoundException, StreamableFile } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Request, Response } from "express";
+import type { RemixBgmService } from "./remix-bgm.service";
 import type { RemixExportService } from "./remix-export.service";
 import { RemixPolicyGuard } from "./remix-policy.guard";
 import type { RemixStorageService } from "./remix-storage.service";
@@ -12,8 +14,13 @@ describe("RemixController render endpoints", () => {
     enqueueRender: ReturnType<typeof vi.fn>;
     generateBanners: ReturnType<typeof vi.fn>;
   };
-  let remixStorage: { getRender: ReturnType<typeof vi.fn> };
+  let remixStorage: {
+    headRender: ReturnType<typeof vi.fn>;
+    getRenderStream: ReturnType<typeof vi.fn>;
+  };
   let remixPolicyGuard: RemixPolicyGuard;
+  let request: Pick<Request, "headers">;
+  let response: Pick<Response, "setHeader" | "status">;
   let controller: RemixController;
 
   beforeEach(() => {
@@ -25,12 +32,26 @@ describe("RemixController render endpoints", () => {
         .mockResolvedValue({ header: "Header", bottom: "Bottom" }),
     };
     remixStorage = {
-      getRender: vi.fn().mockResolvedValue(Buffer.from("rendered-mp4")),
+      headRender: vi.fn().mockResolvedValue({
+        contentLength: Buffer.byteLength("rendered-mp4"),
+        contentType: "video/mp4",
+      }),
+      getRenderStream: vi.fn().mockResolvedValue({
+        body: { pipe: vi.fn() },
+        contentLength: Buffer.byteLength("rendered-mp4"),
+        contentType: "video/mp4",
+      }),
     };
     remixPolicyGuard = new RemixPolicyGuard();
+    request = { headers: {} };
+    response = {
+      setHeader: vi.fn(),
+      status: vi.fn(),
+    };
 
     controller = new RemixController(
       remixService as unknown as RemixService,
+      {} as RemixBgmService,
       {} as RemixExportService,
       remixPolicyGuard,
       remixStorage as unknown as RemixStorageService,
@@ -59,12 +80,21 @@ describe("RemixController render endpoints", () => {
       usagePolicy: "remix_draft",
     });
 
-    const result = await controller.streamRender("remake_1");
+    await controller.streamRender(
+      "remake_1",
+      undefined,
+      request as Request,
+      response as Response,
+    );
 
-    expect(result).toBeInstanceOf(StreamableFile);
-    expect(remixStorage.getRender).toHaveBeenCalledWith(
+    expect(remixStorage.headRender).toHaveBeenCalledWith(
       "remix/remake_1/render.mp4",
     );
+    expect(remixStorage.getRenderStream).toHaveBeenCalledWith(
+      "remix/remake_1/render.mp4",
+      undefined,
+    );
+    expect(response.setHeader).toHaveBeenCalledWith("Content-Type", "video/mp4");
   });
 
   it("GET :id/render rejects preview when render is not ready", async () => {
@@ -75,10 +105,15 @@ describe("RemixController render endpoints", () => {
       usagePolicy: "remix_draft",
     });
 
-    await expect(controller.streamRender("remake_1")).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
-    expect(remixStorage.getRender).not.toHaveBeenCalled();
+    await expect(
+      controller.streamRender(
+        "remake_1",
+        undefined,
+        request as Request,
+        response as Response,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(remixStorage.headRender).not.toHaveBeenCalled();
   });
 
   it("GET :id/render?download=1 requires canExport and forbids otherwise", async () => {
@@ -90,9 +125,14 @@ describe("RemixController render endpoints", () => {
     });
 
     await expect(
-      controller.streamRender("remake_1", "1"),
+      controller.streamRender(
+        "remake_1",
+        "1",
+        request as Request,
+        response as Response,
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
-    expect(remixStorage.getRender).not.toHaveBeenCalled();
+    expect(remixStorage.headRender).not.toHaveBeenCalled();
   });
 
   it("GET :id/render?download=1 streams with attachment disposition when approved", async () => {
@@ -103,11 +143,20 @@ describe("RemixController render endpoints", () => {
       usagePolicy: "approved_for_export",
     });
 
-    const result = await controller.streamRender("remake_1", "1");
+    await controller.streamRender(
+      "remake_1",
+      "1",
+      request as Request,
+      response as Response,
+    );
 
-    expect(result).toBeInstanceOf(StreamableFile);
-    expect(remixStorage.getRender).toHaveBeenCalledWith(
+    expect(remixStorage.getRenderStream).toHaveBeenCalledWith(
       "remix/remake_1/render.mp4",
+      undefined,
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "Content-Disposition",
+      'attachment; filename="remix-remake_1-render.mp4"',
     );
   });
 
@@ -120,7 +169,12 @@ describe("RemixController render endpoints", () => {
     });
 
     await expect(
-      controller.streamRender("remake_1", "1"),
+      controller.streamRender(
+        "remake_1",
+        "1",
+        request as Request,
+        response as Response,
+      ),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

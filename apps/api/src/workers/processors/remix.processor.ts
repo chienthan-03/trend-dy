@@ -18,6 +18,11 @@ import { translateTranscript } from "../../ai/translate";
 import { createDouyinVideoAdapter } from "../../modules/remix/douyin-video.adapter";
 import type { DouyinVideoDetail } from "../../modules/remix/douyin-video.adapter";
 import { createRemixMediaAdapter } from "../../modules/remix/remix-media.adapter";
+import type { DownloadedMedia } from "../../modules/remix/remix-media.adapter";
+import {
+  downloadYtdlpVideo,
+  isYtdlpVideoProvider,
+} from "../../modules/remix/adapters/live/ytdlp-video.provider";
 import { extractAudioForStt } from "../../modules/remix/remix-audio.util";
 import {
   getDefaultTtsVoiceId,
@@ -27,6 +32,7 @@ import {
   getPiperModelStem,
   getRemixScriptMode,
   getRemixLlmModel,
+  getSttBilingualEnglishWindowSec,
   getSttLanguageHint,
   getTtsModel,
   getTtsTimingMode,
@@ -61,6 +67,7 @@ import {
 import { finalizeDubTimeline } from "../../modules/remix/tts/finalize-dub-timeline";
 import { planSequentialTimeline } from "../../modules/remix/tts/sequential-timeline";
 import { classifyTranslatedSegments } from "../../modules/remix/tts/classify-segments";
+import { centerCoarseSourceWindows } from "../../modules/remix/tts/center-coarse-source-windows";
 import { effectiveRole } from "../../modules/remix/tts/segment-role";
 import { shortenSegmentText } from "../../modules/remix/tts/shorten-segment";
 import {
@@ -87,7 +94,7 @@ import { estimateLlmCostUsd } from "../../modules/usage/cost";
 import { PrismaService } from "../../prisma/prisma.service";
 import { QUEUE_NAMES } from "../../queue/queues";
 import { markCompleted, markFailed, markStarted } from "../job-status";
-import type { RemixBannerJson, RemixTranscriptV1 } from "@factory/shared";
+import type { RemixBannerJson, RemixTranscriptSegment, RemixTranscriptV1 } from "@factory/shared";
 
 const [, , , , , REMIX_Q] = QUEUE_NAMES;
 
@@ -357,6 +364,22 @@ export class RemixProcessor extends WorkerHost {
     const { remakeId } = payload;
     const remake = await this.remixService.getRemake(remakeId);
     const snapshot = (remake.sourceSnapshot ?? {}) as Record<string, unknown>;
+    const sourceUrl =
+      remake.sourceUrl?.trim() ||
+      (typeof snapshot.canonicalUrl === "string"
+        ? snapshot.canonicalUrl.trim()
+        : "");
+
+    if (isYtdlpVideoProvider()) {
+      if (!sourceUrl) {
+        throw new Error(
+          `Remake ${remakeId} missing sourceUrl for yt-dlp download`,
+        );
+      }
+      const downloaded = await downloadYtdlpVideo(sourceUrl);
+      await this.persistDownloadedMedia(jobId, remakeId, remake, downloaded);
+      return;
+    }
 
     // CDN playUrl expires quickly — always refresh via video detail when possible.
     let playUrl =
@@ -390,6 +413,15 @@ export class RemixProcessor extends WorkerHost {
       playUrl,
       remake.externalVideoId,
     );
+    await this.persistDownloadedMedia(jobId, remakeId, remake, downloaded);
+  }
+
+  private async persistDownloadedMedia(
+    jobId: string,
+    remakeId: string,
+    remake: Awaited<ReturnType<RemixService["getRemake"]>>,
+    downloaded: DownloadedMedia,
+  ): Promise<void> {
     const mediaVideoKey = await this.remixStorage.putVideo(
       remakeId,
       downloaded.buffer,
@@ -493,14 +525,19 @@ export class RemixProcessor extends WorkerHost {
       costUsd: sttCostUsd,
       timingDegraded,
       timingCoarse,
+      sttWarning,
     } = await transcribeAudio(audioBuffer, {
       languageHint: getSttLanguageHint(),
     });
 
-    const timingWarning =
+    const timingWarnings = [
       timingDegraded || timingCoarse
         ? "Timeline cue còn thô hoặc ước lượng — nên Transcribe lại / kiểm tra sync."
-        : null;
+        : null,
+      sttWarning ?? null,
+    ].filter((warning): warning is string => Boolean(warning));
+    const timingWarning =
+      timingWarnings.length > 0 ? timingWarnings.join(" ") : null;
 
     await this.prisma.viralRemake.update({
       where: { id: remakeId },
@@ -797,8 +834,37 @@ export class RemixProcessor extends WorkerHost {
           lockGraceSec: getHybridLockGraceSec(),
           maxSpeed,
           videoEndSec: remake.videoDurationSec ?? undefined,
+          // Coarse bilingual STT: don't squeeze first-of-block / auto-source
+          // cues into guessed ZH windows — that races VO ahead of picture.
+          lockAutoSource: !remake.timingWarning,
         }
       : null;
+
+    if (remake.timingWarning) {
+      const windowSec = getSttBilingualEnglishWindowSec();
+      const centeredSegments = centerCoarseSourceWindows(translated.segments, {
+        windowSec,
+        videoEndSec: remake.videoDurationSec ?? translated.durationSec,
+      });
+      const didShift = centeredSegments.some(
+        (segment, index) =>
+          segment.startSec !== translated.segments[index]?.startSec ||
+          segment.endSec !== translated.segments[index]?.endSec,
+      );
+      if (didShift) {
+        translated = { ...translated, segments: centeredSegments };
+        await this.prisma.viralRemake.update({
+          where: { id: remakeId },
+          data: {
+            sourceTranscriptTranslated:
+              translated as unknown as Prisma.InputJsonValue,
+          },
+        });
+        this.logger.log(
+          `remix_tts ${jobId}: centered coarse source windows (${windowSec}s) so later review is not packed before the clip`,
+        );
+      }
+    }
 
     type RawClip = {
       buffer: Buffer;
@@ -806,6 +872,7 @@ export class RemixProcessor extends WorkerHost {
       zhStartSec: number;
       zhEndSec: number;
       role: ReturnType<typeof effectiveRole>;
+      roleSource: RemixTranscriptSegment["roleSource"];
     };
     const rawByIndex = new Map<number, RawClip>();
 
@@ -832,8 +899,12 @@ export class RemixProcessor extends WorkerHost {
             startSec: cue.startSec,
             endSec: cue.endSec,
             role: effectiveRole(translated.segments[cue.index]!),
+            roleSource: translated.segments[cue.index]?.roleSource,
           })),
-          { blockGapSec: hybridOptions!.blockGapSec },
+          {
+            blockGapSec: hybridOptions!.blockGapSec,
+            lockAutoSource: hybridOptions!.lockAutoSource,
+          },
         )
       : null;
 
@@ -952,6 +1023,7 @@ export class RemixProcessor extends WorkerHost {
           zhStartSec: segment.startSec,
           zhEndSec: segment.endSec,
           role: effectiveRole(translated.segments[segment.index]!),
+          roleSource: translated.segments[segment.index]?.roleSource,
         });
         continue;
       }
@@ -980,6 +1052,7 @@ export class RemixProcessor extends WorkerHost {
           zhStartSec: slice.startSec,
           zhEndSec: slice.endSec,
           role: effectiveRole(translated.segments[slice.index]!),
+          roleSource: translated.segments[slice.index]?.roleSource,
         });
       }
     }
@@ -1004,6 +1077,7 @@ export class RemixProcessor extends WorkerHost {
               startSec: raw.zhStartSec,
               endSec: raw.zhEndSec,
               role: raw.role,
+              roleSource: raw.roleSource,
               audioDurationSec: raw.audioDurationSec,
             })),
             hybridOptions,

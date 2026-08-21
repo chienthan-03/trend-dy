@@ -708,11 +708,26 @@ export const translateTranscript = async (
         `Translate segment count mismatch: source=${source.segments.length} translated=${segments.length}`,
       );
     }
-    return source.segments.map((sourceSeg, index) => ({
-      ...segments[index]!,
-      startSec: sourceSeg.startSec,
-      endSec: sourceSeg.endSec,
-    }));
+    return source.segments.map((sourceSeg, index) => {
+      const translatedSeg = { ...segments[index]! };
+      if (sourceSeg.role == null) {
+        delete translatedSeg.role;
+        delete translatedSeg.roleSource;
+      } else {
+        translatedSeg.role = sourceSeg.role;
+        if (sourceSeg.roleSource) {
+          translatedSeg.roleSource = sourceSeg.roleSource;
+        } else {
+          delete translatedSeg.roleSource;
+        }
+      }
+
+      return {
+        ...translatedSeg,
+        startSec: sourceSeg.startSec,
+        endSec: sourceSeg.endSec,
+      };
+    });
   };
 
   if (resolveTranslateMode() === "fake") {

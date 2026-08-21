@@ -18,6 +18,55 @@ describe("markHybridLocks", () => {
     expect(locked.has(1)).toBe(false); // contiguous narration, no gap
     expect(locked.has(2)).toBe(true); // source is always locked
   });
+
+  it("does not lock auto source when lockAutoSource is false", () => {
+    const locked = markHybridLocks(
+      [
+        { index: 0, startSec: 0, endSec: 1, role: "narration" },
+        {
+          index: 1,
+          startSec: 25,
+          endSec: 28,
+          role: "source",
+          roleSource: "auto",
+        },
+      ],
+      { blockGapSec: 1, lockAutoSource: false },
+    );
+
+    expect(locked.has(0)).toBe(false);
+    expect(locked.has(1)).toBe(false);
+  });
+
+  it("does not lock first cue or gap narration when lockAutoSource is false", () => {
+    const locked = markHybridLocks(
+      [
+        { index: 0, startSec: 0, endSec: 1, role: "narration" },
+        { index: 1, startSec: 3, endSec: 4, role: "narration" },
+      ],
+      { blockGapSec: 1, lockAutoSource: false },
+    );
+
+    expect(locked.size).toBe(0);
+  });
+
+  it("still locks manually marked source when lockAutoSource is false", () => {
+    const locked = markHybridLocks(
+      [
+        { index: 0, startSec: 0, endSec: 1, role: "narration" },
+        {
+          index: 1,
+          startSec: 25,
+          endSec: 28,
+          role: "source",
+          roleSource: "manual",
+        },
+      ],
+      { blockGapSec: 1, lockAutoSource: false },
+    );
+
+    expect(locked.has(1)).toBe(true);
+  });
 });
 
 describe("planHybridTimeline", () => {
@@ -101,5 +150,31 @@ describe("planHybridTimeline", () => {
     );
     expect(out[0]!.locked).toBe(true);
     expect(out[0]!.fitTargetSec).toBeCloseTo(1.0); // locked → ZH window, not natural 0.4
+  });
+
+  it("plays first cue at natural duration when lockAutoSource is false", () => {
+    const out = planHybridTimeline(
+      [
+        { index: 0, startSec: 0, endSec: 2, role: "narration", audioDurationSec: 6 },
+        { index: 1, startSec: 2, endSec: 4, role: "narration", audioDurationSec: 2 },
+      ],
+      { ...opts, lockAutoSource: false },
+    );
+    expect(out[0]!.locked).toBe(false);
+    expect(out[0]!.fitTargetSec).toBeCloseTo(6);
+    expect(out[1]!.startSec).toBeCloseTo(6);
+  });
+
+  it("never starts before the original cue start", () => {
+    const out = planHybridTimeline(
+      [
+        { index: 0, startSec: 2.5, endSec: 4, role: "narration", audioDurationSec: 1 },
+        { index: 1, startSec: 6, endSec: 8, role: "narration", audioDurationSec: 1 },
+      ],
+      { ...opts, lockAutoSource: false },
+    );
+    expect(out[0]!.startSec).toBe(2.5);
+    expect(out[0]!.fitTargetSec).toBeCloseTo(1);
+    expect(out[1]!.startSec).toBe(6);
   });
 });

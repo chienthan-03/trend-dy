@@ -469,6 +469,110 @@ describe("RemixService.retranscribe", () => {
   });
 });
 
+describe("RemixService.redownloadMedia", () => {
+  let prisma: {
+    viralRemake: {
+      findUnique: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+  };
+  let jobsService: { enqueue: ReturnType<typeof vi.fn> };
+  let service: RemixService;
+  let previousRemixEnabled: string | undefined;
+  let previousAllowDownload: string | undefined;
+  let previousScriptMode: string | undefined;
+  let previousAdapter: string | undefined;
+  let previousVideoProvider: string | undefined;
+
+  beforeEach(() => {
+    previousRemixEnabled = process.env.REMIX_ENABLED;
+    previousAllowDownload = process.env.REMIX_ALLOW_MEDIA_DOWNLOAD;
+    previousScriptMode = process.env.REMIX_SCRIPT_MODE;
+    previousAdapter = process.env.DOUYIN_ADAPTER;
+    previousVideoProvider = process.env.DOUYIN_VIDEO_PROVIDER;
+    process.env.REMIX_ENABLED = "true";
+    process.env.REMIX_ALLOW_MEDIA_DOWNLOAD = "true";
+    process.env.REMIX_SCRIPT_MODE = "full";
+    process.env.DOUYIN_ADAPTER = "live";
+    delete process.env.DOUYIN_VIDEO_PROVIDER;
+
+    prisma = {
+      viralRemake: {
+        findUnique: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    jobsService = {
+      enqueue: vi.fn().mockResolvedValue({ jobId: "job_dl", status: "queued" }),
+    };
+    service = new RemixService(
+      prisma as unknown as PrismaService,
+      jobsService as unknown as JobsService,
+      createRemixStorageMock() as unknown as RemixStorageService,
+    );
+  });
+
+  afterEach(() => {
+    if (previousRemixEnabled === undefined) {
+      delete process.env.REMIX_ENABLED;
+    } else {
+      process.env.REMIX_ENABLED = previousRemixEnabled;
+    }
+    if (previousAllowDownload === undefined) {
+      delete process.env.REMIX_ALLOW_MEDIA_DOWNLOAD;
+    } else {
+      process.env.REMIX_ALLOW_MEDIA_DOWNLOAD = previousAllowDownload;
+    }
+    if (previousScriptMode === undefined) {
+      delete process.env.REMIX_SCRIPT_MODE;
+    } else {
+      process.env.REMIX_SCRIPT_MODE = previousScriptMode;
+    }
+    if (previousAdapter === undefined) {
+      delete process.env.DOUYIN_ADAPTER;
+    } else {
+      process.env.DOUYIN_ADAPTER = previousAdapter;
+    }
+    if (previousVideoProvider === undefined) {
+      delete process.env.DOUYIN_VIDEO_PROVIDER;
+    } else {
+      process.env.DOUYIN_VIDEO_PROVIDER = previousVideoProvider;
+    }
+  });
+
+  it("enqueues download from sourceUrl when yt-dlp provider has no playUrl", async () => {
+    process.env.DOUYIN_VIDEO_PROVIDER = "ytdlp";
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceUrl: "https://v.douyin.com/abc/",
+      sourceSnapshot: {},
+    });
+
+    const result = await service.redownloadMedia("remake_1");
+
+    expect(result).toEqual({ remakeId: "remake_1", jobId: "job_dl" });
+    expect(jobsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "remix_download_media",
+        payload: { remakeId: "remake_1" },
+      }),
+    );
+  });
+
+  it("throws when Just One path has no playUrl", async () => {
+    prisma.viralRemake.findUnique.mockResolvedValue({
+      id: "remake_1",
+      sourceUrl: "https://v.douyin.com/abc/",
+      sourceSnapshot: {},
+    });
+
+    await expect(service.redownloadMedia("remake_1")).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(jobsService.enqueue).not.toHaveBeenCalled();
+  });
+});
+
 describe("RemixService.retranslate", () => {
   let prisma: {
     viralRemake: {

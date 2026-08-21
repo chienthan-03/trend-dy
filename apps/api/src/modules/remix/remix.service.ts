@@ -41,6 +41,7 @@ import {
 import { effectiveRole } from "./tts/segment-role";
 import { buildRemixCostEstimate } from "./remix-cost-estimate";
 import { isTranslateEnabled, shouldSkipRemixGenerate } from "./translate-config";
+import { isYtdlpVideoProvider } from "./adapters/live/ytdlp-video.provider";
 
 export type TriggerRemixInput = {
   projectId: string;
@@ -473,8 +474,19 @@ export class RemixService {
     const snapshot = remake.sourceSnapshot as Record<string, unknown> | null;
     const playUrl =
       typeof snapshot?.playUrl === "string" ? snapshot.playUrl.trim() : "";
+    const sourceUrl =
+      remake.sourceUrl?.trim() ||
+      (typeof snapshot?.canonicalUrl === "string"
+        ? snapshot.canonicalUrl.trim()
+        : "");
 
-    if (!playUrl) {
+    if (isYtdlpVideoProvider()) {
+      if (!sourceUrl) {
+        throw new BadRequestException(
+          "Remake has no sourceUrl — cannot re-download media with yt-dlp",
+        );
+      }
+    } else if (!playUrl) {
       throw new BadRequestException(
         "Remake has no playUrl in sourceSnapshot — cannot re-download media",
       );

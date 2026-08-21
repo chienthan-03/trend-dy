@@ -101,8 +101,8 @@ export type TtsTimingMode = "sequential" | "hybrid" | "strict";
 export const getTtsTimingMode = (): TtsTimingMode => {
   const raw = process.env.REMIX_TTS_TIMING_MODE?.trim().toLowerCase();
   if (raw === "strict") return "strict";
-  if (raw === "hybrid") return "hybrid";
-  return "sequential";
+  if (raw === "sequential") return "sequential";
+  return "hybrid";
 };
 
 export const getHybridBlockGapSec = (): number => {
@@ -334,6 +334,16 @@ export const getSttChunkDurationSec = (): number =>
 export const getSttLanguageHint = (): string | undefined => {
   const raw = process.env.REMIX_STT_LANGUAGE?.trim().toLowerCase();
   return raw || undefined;
+};
+
+/** Run an additional English-only Qwen pass to recover film dialogue text. */
+export const isBilingualSttEnabled = (): boolean =>
+  process.env.REMIX_STT_BILINGUAL?.trim().toLowerCase() === "true";
+
+/** Smaller windows help the text-only English recovery pass find sparse dialogue. */
+export const getSttBilingualEnglishWindowSec = (): number => {
+  const n = Number(process.env.REMIX_STT_BILINGUAL_EN_WINDOW_SEC ?? "45");
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 300) : 45;
 };
 
 /** Duration-based STT pricing (USD per minute). */

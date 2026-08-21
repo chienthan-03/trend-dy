@@ -58,6 +58,39 @@ describe("translateTranscript (fake mode)", () => {
     expect(result.transcript.segments[0]?.text).toMatch(/^\[VI\]/);
     expect(result.transcript.fullText.length).toBeGreaterThan(0);
   });
+
+  it("preserves source and narration roles through fake translation", async () => {
+    const source: RemixTranscriptV1 = {
+      ...SAMPLE_SOURCE,
+      segments: [
+        {
+          startSec: 0,
+          endSec: 5,
+          text: "旁白",
+          role: "narration",
+          roleSource: "auto",
+        },
+        {
+          startSec: 5,
+          endSec: 10,
+          text: "Stop",
+          role: "source",
+          roleSource: "auto",
+        },
+      ],
+    };
+
+    const result = await translateTranscript(source);
+
+    expect(result.transcript.segments[0]).toMatchObject({
+      role: "narration",
+      roleSource: "auto",
+    });
+    expect(result.transcript.segments[1]).toMatchObject({
+      role: "source",
+      roleSource: "auto",
+    });
+  });
 });
 
 describe("translateTranscript (llm live mode)", () => {

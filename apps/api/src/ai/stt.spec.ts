@@ -293,6 +293,190 @@ describe("transcribeAudio", () => {
     expect(result.costUsd).toBeCloseTo(0.0001575);
   });
 
+  it("runs an OpenRouter English pass and merges recovered dialogue text", async () => {
+    process.env.REMIX_STT_MODE = "live";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+    process.env.REMIX_STT_BILINGUAL = "true";
+    process.env.REMIX_STT_LANGUAGE = "zh";
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "他走进酒馆。",
+            usage: { seconds: 20, cost: 0.0007 },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "You are under arrest.",
+            usage: { seconds: 20, cost: 0.0007 },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    const result = await transcribeAudio(
+      Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+      { languageHint: "zh" },
+    );
+
+    const primaryForm = fetchMock.mock.calls[0]?.[1]?.body as FormData;
+    const englishForm = fetchMock.mock.calls[1]?.[1]?.body as FormData;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(primaryForm?.get("language")).toBeNull();
+    expect(englishForm?.get("language")).toBe("en");
+    expect(result.transcript.language).toBe("mixed");
+    expect(result.transcript.fullText).toContain("他走进酒馆");
+    expect(result.transcript.fullText).toContain("You are under arrest");
+    expect(
+      result.transcript.segments.some(
+        (segment) =>
+          segment.role === "source" &&
+          segment.text.includes("You are under arrest"),
+      ),
+    ).toBe(true);
+    expect(
+      result.transcript.segments.some(
+        (segment) =>
+          segment.role === "narration" && segment.text.includes("他走进酒馆"),
+      ),
+    ).toBe(true);
+    expect(result.timingDegraded).toBe(true);
+    expect(result.timingCoarse).toBe(true);
+    expect(result.sttWarning).toMatch(/OpenRouter.*English/i);
+    expect(result.costUsd).toBeCloseTo(0.0014);
+  });
+
+  it("keeps the primary transcript when the optional English pass fails", async () => {
+    process.env.REMIX_STT_MODE = "live";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+    process.env.REMIX_STT_BILINGUAL = "true";
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "旁白继续。",
+            usage: { seconds: 12, cost: 0.00042 },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("provider unavailable", { status: 503 }));
+
+    const result = await transcribeAudio(Buffer.from("live-wav"));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.transcript.fullText).toBe("旁白继续。");
+    expect(result.sttWarning).toMatch(/English.*failed/i);
+    expect(result.costUsd).toBeCloseTo(0.00042);
+  });
+
+  it("recovers English from short windows and anchors cues to those windows", async () => {
+    process.env.REMIX_STT_MODE = "live";
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_GATEWAY_URL = "https://openrouter.ai/api/v1";
+    process.env.REMIX_STT_MODEL = "qwen/qwen3-asr-flash-2026-02-10";
+    process.env.REMIX_STT_BILINGUAL = "true";
+    process.env.REMIX_STT_BILINGUAL_EN_WINDOW_SEC = "5";
+    process.env.REMIX_STT_AUDIO_BITRATE_KBPS = "48";
+
+    const audioUtil = await import("../modules/remix/remix-audio.util");
+    const sliceMock = vi
+      .spyOn(audioUtil, "sliceAudioWindowForStt")
+      .mockResolvedValue(Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "旁白一。旁白二。",
+            usage: { seconds: 11, cost: 0.000385 },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "旁白噪音",
+            usage: { seconds: 5, cost: 0.000175 },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "Where is he?",
+            usage: { seconds: 5, cost: 0.000175 },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            text: "Let's go.",
+            usage: { seconds: 1, cost: 0.000035 },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    const result = await transcribeAudio(Buffer.alloc(66_000, 0), {
+      languageHint: "zh",
+    });
+
+    expect(sliceMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const sourceSegments = result.transcript.segments.filter(
+      (segment) => segment.role === "source",
+    );
+    const where = sourceSegments.find((segment) =>
+      segment.text.includes("Where is he?"),
+    );
+    const letsGo = sourceSegments.find((segment) =>
+      segment.text.includes("Let's go."),
+    );
+    expect(where).toMatchObject({
+      text: "Where is he?",
+    });
+    expect(where!.endSec).toBeLessThan(10);
+    expect(letsGo).toMatchObject({
+      endSec: 11,
+      text: "Let's go.",
+    });
+    expect(where!.startSec).toBeGreaterThan(5);
+    expect(letsGo!.startSec).toBeGreaterThanOrEqual(10);
+    expect((where?.endSec ?? 0) - (where?.startSec ?? 0)).toBeLessThan(5);
+    expect((letsGo?.endSec ?? 0) - (letsGo?.startSec ?? 0)).toBeLessThanOrEqual(1);
+    expect(
+      result.transcript.segments.some(
+        (segment) =>
+          segment.role === "narration" &&
+          segment.startSec < 5 &&
+          segment.endSec > segment.startSec,
+      ),
+    ).toBe(true);
+    expect(
+      result.transcript.segments.every(
+        (segment, index, segments) =>
+          index === 0 || segment.startSec >= segments[index - 1]!.endSec,
+      ),
+    ).toBe(true);
+  });
+
   it("chunks long Qwen audio at the five-minute provider limit", async () => {
     process.env.REMIX_STT_MODE = "live";
     process.env.OPENAI_API_KEY = "test-key";

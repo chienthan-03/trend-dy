@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import type { RemixTranscriptV1, RemixTranscriptWord } from "@factory/shared";
+import type {
+  RemixTranscriptSegment,
+  RemixTranscriptV1,
+  RemixTranscriptWord,
+} from "@factory/shared";
 import {
   getSttChunkDurationSec,
   getSttMaxUploadMb,
@@ -8,6 +12,8 @@ import {
   getSttAudioBitrateKbps,
   getSttCostPerMinuteUsd,
   getSttModel,
+  getSttBilingualEnglishWindowSec,
+  isBilingualSttEnabled,
   type SttResponseFormat,
 } from "../modules/remix/remix-config";
 import {
@@ -16,6 +22,11 @@ import {
   splitMp3ForStt,
 } from "../modules/remix/remix-audio.util";
 import { buildSegmentsFromPlainText } from "./plain-text-segments";
+import {
+  hasLatinDialogueText,
+  mergeBilingualTextPasses,
+  type BilingualEnglishPass,
+} from "./merge-bilingual-text";
 import {
   detectCoarseTiming,
   normalizeCueTiming,
@@ -27,6 +38,7 @@ export type TranscribeAudioResult = {
   costUsd: number;
   timingDegraded?: boolean;
   timingCoarse?: boolean;
+  sttWarning?: string;
 };
 
 export type TranscribeWordsResult = {
@@ -243,6 +255,176 @@ const mergeTranscripts = (
   };
 };
 
+const OPENROUTER_BILINGUAL_WARNING =
+  "OpenRouter Qwen dual-pass (auto + English) đã bắt thêm EN, nhưng API chỉ trả text nên timing cue vẫn là ước lượng.";
+
+const OPENROUTER_EN_PASS_FAILURE_WARNING =
+  "OpenRouter English pass failed; transcript chính vẫn được giữ lại.";
+
+const OPENROUTER_EN_EMPTY_WARNING =
+  "OpenRouter English pass không trả về text EN mới; timing cue vẫn là ước lượng.";
+
+const getTranscriptText = (transcript: RemixTranscriptV1): string =>
+  transcript.fullText.trim() ||
+  transcript.segments
+    .map((segment) => segment.text.trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+type EnglishRecoveryResult = {
+  passes: BilingualEnglishPass[];
+  costUsd: number;
+  failed: boolean;
+};
+
+const recoverEnglishWithOpenRouter = async (input: {
+  audioBuffer: Buffer;
+  durationSec: number;
+  timeOffsetSec: number;
+}): Promise<EnglishRecoveryResult> => {
+  const windowSec = getSttBilingualEnglishWindowSec();
+  const passes: BilingualEnglishPass[] = [];
+  let costUsd = 0;
+  let failed = false;
+
+  for (
+    let offsetSec = 0;
+    offsetSec < input.durationSec;
+    offsetSec += windowSec
+  ) {
+    const currentWindowSec = Math.min(
+      windowSec,
+      input.durationSec - offsetSec,
+    );
+    let windowBuffer = input.audioBuffer;
+
+    if (input.durationSec > windowSec) {
+      try {
+        windowBuffer = await sliceAudioWindowForStt(
+          input.audioBuffer,
+          offsetSec,
+          currentWindowSec,
+        );
+      } catch {
+        failed = true;
+        continue;
+      }
+    }
+
+    try {
+      const result = await transcribeWithOpenAi(
+        windowBuffer,
+        "en",
+        input.timeOffsetSec + offsetSec,
+      );
+      costUsd += result.costUsd;
+      passes.push({
+        text: getTranscriptText(result.transcript),
+        timeOffsetSec: input.timeOffsetSec + offsetSec,
+        durationSec: currentWindowSec,
+      });
+    } catch {
+      failed = true;
+    }
+  }
+
+  return { passes, costUsd, failed };
+};
+
+const transcribeBilingualWithOpenRouter = async (
+  audioBuffer: Buffer,
+  timeOffsetSec = 0,
+): Promise<TranscribeAudioResult> => {
+  const primary = await transcribeWithOpenAi(
+    audioBuffer,
+    undefined,
+    timeOffsetSec,
+  );
+  const durationSec = Math.max(
+    estimateAudioDurationSec(audioBuffer),
+    primary.transcript.durationSec - timeOffsetSec,
+    0,
+  );
+  const english = await recoverEnglishWithOpenRouter({
+    audioBuffer,
+    durationSec,
+    timeOffsetSec,
+  });
+  const merged = mergeBilingualTextPasses({
+    primaryText: getTranscriptText(primary.transcript),
+    englishPasses: english.passes,
+    primaryLanguage: primary.transcript.language,
+    durationSec,
+    timeOffsetSec,
+  });
+  const warning = merged.addedEnglish
+    ? english.failed
+      ? `${OPENROUTER_BILINGUAL_WARNING} ${OPENROUTER_EN_PASS_FAILURE_WARNING}`
+      : OPENROUTER_BILINGUAL_WARNING
+    : english.failed
+      ? OPENROUTER_EN_PASS_FAILURE_WARNING
+      : OPENROUTER_EN_EMPTY_WARNING;
+
+  return {
+    transcript: {
+      version: 1,
+      language: merged.language,
+      durationSec: timeOffsetSec + durationSec,
+      segments: merged.segments,
+      fullText: merged.fullText,
+      provider: primary.transcript.provider,
+      model: primary.transcript.model,
+    },
+    costUsd: primary.costUsd + english.costUsd,
+    timingDegraded: true,
+    timingCoarse: true,
+    sttWarning: warning,
+  };
+};
+
+const overlapSec = (
+  left: RemixTranscriptSegment,
+  right: RemixTranscriptSegment,
+): number =>
+  Math.max(
+    0,
+    Math.min(left.endSec, right.endSec) -
+      Math.max(left.startSec, right.startSec),
+  );
+
+const reattachBilingualRoles = (
+  normalizedSegments: RemixTranscriptSegment[],
+  originalSegments: RemixTranscriptSegment[],
+): RemixTranscriptSegment[] =>
+  normalizedSegments.map((segment) => {
+    const bestMatch = originalSegments
+      .filter((candidate) => candidate.role != null)
+      .map((candidate) => ({ candidate, overlap: overlapSec(segment, candidate) }))
+      .sort((a, b) => b.overlap - a.overlap)
+      .find((match) => match.overlap > 0)?.candidate;
+
+    if (bestMatch?.role) {
+      return {
+        ...segment,
+        role: bestMatch.role,
+        ...(bestMatch.roleSource
+          ? { roleSource: bestMatch.roleSource }
+          : {}),
+      };
+    }
+
+    return {
+      ...segment,
+      role:
+        hasLatinDialogueText(segment.text) &&
+        !/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(segment.text)
+          ? "source"
+          : "narration",
+      roleSource: "auto",
+    };
+  });
+
 const buildFakeTranscript = (
   wavBuffer: Buffer,
   languageHint?: string,
@@ -303,9 +485,10 @@ const transcribeWithOpenAi = async (
     responseFormat: SttResponseFormat,
   ): Promise<Response> => {
     const form = new FormData();
+    const blobBytes = new Uint8Array(audioBuffer).slice();
     form.append(
       "file",
-      new Blob([audioBuffer], { type: mime }),
+      new Blob([blobBytes], { type: mime }),
       fileName,
     );
     form.append("model", model);
@@ -431,12 +614,18 @@ const transcribeChunkedMp3 = async (
   let totalCostUsd = 0;
   let timeOffsetSec = 0;
   let timingDegraded = false;
+  const sttWarnings = new Set<string>();
 
   for (const chunk of chunks) {
-    const result = await transcribeWithOpenAi(chunk, languageHint, timeOffsetSec);
+    const result = isBilingualSttEnabled()
+      ? await transcribeBilingualWithOpenRouter(chunk, timeOffsetSec)
+      : await transcribeWithOpenAi(chunk, languageHint, timeOffsetSec);
     parts.push(result.transcript);
     totalCostUsd += result.costUsd;
     timingDegraded = timingDegraded || Boolean(result.timingDegraded);
+    if (result.sttWarning) {
+      sttWarnings.add(result.sttWarning);
+    }
 
     const transcriptChunkDuration =
       Math.max(result.transcript.durationSec - timeOffsetSec, 0);
@@ -459,9 +648,12 @@ const transcribeChunkedMp3 = async (
     durationSec: merged.durationSec,
   });
   timingDegraded = timingDegraded || renormalized.degraded;
+  const normalizedSegments = isBilingualSttEnabled()
+    ? reattachBilingualRoles(renormalized.segments, merged.segments)
+    : renormalized.segments;
   const transcript: RemixTranscriptV1 = {
     ...merged,
-    segments: renormalized.segments,
+    segments: normalizedSegments,
   };
   const timingCoarse = detectCoarseTiming({
     segments: transcript.segments,
@@ -474,6 +666,9 @@ const transcribeChunkedMp3 = async (
     costUsd: totalCostUsd,
     timingDegraded,
     timingCoarse,
+    ...(sttWarnings.size > 0
+      ? { sttWarning: [...sttWarnings].join(" ") }
+      : {}),
   };
 };
 
@@ -504,7 +699,9 @@ export const transcribeAudio = async (
     return transcribeChunkedMp3(prepared, opts?.languageHint);
   }
 
-  return transcribeWithOpenAi(prepared, opts?.languageHint);
+  return isBilingualSttEnabled()
+    ? transcribeBilingualWithOpenRouter(prepared)
+    : transcribeWithOpenAi(prepared, opts?.languageHint);
 };
 
 /**

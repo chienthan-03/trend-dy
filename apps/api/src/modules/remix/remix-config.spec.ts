@@ -15,9 +15,11 @@ import {
   getSttCostPerMinuteUsd,
   getSttChunkDurationSec,
   getSttLanguageHint,
+  getSttBilingualEnglishWindowSec,
   getSttMaxUploadMb,
   getSttModel,
   getSttResponseFormat,
+  isBilingualSttEnabled,
   getDefaultTtsSpeed,
   getTtsMaxSpeed,
   resolveTtsMaxSpeed,
@@ -134,6 +136,26 @@ describe("remix-config", () => {
     expect(getSttLanguageHint()).toBe("zh");
   });
 
+  it("defaults OpenRouter bilingual STT to disabled", () => {
+    delete process.env.REMIX_STT_BILINGUAL;
+    expect(isBilingualSttEnabled()).toBe(false);
+  });
+
+  it("accepts true-like bilingual STT configuration", () => {
+    process.env.REMIX_STT_BILINGUAL = " TRUE ";
+    expect(isBilingualSttEnabled()).toBe(true);
+  });
+
+  it("defaults bilingual English recovery windows to 45 seconds", () => {
+    delete process.env.REMIX_STT_BILINGUAL_EN_WINDOW_SEC;
+    expect(getSttBilingualEnglishWindowSec()).toBe(45);
+  });
+
+  it("accepts a positive bilingual English recovery window", () => {
+    process.env.REMIX_STT_BILINGUAL_EN_WINDOW_SEC = "30";
+    expect(getSttBilingualEnglishWindowSec()).toBe(30);
+  });
+
   it("defaults TTS max speed to 1.5", () => {
     delete process.env.REMIX_TTS_MAX_SPEED;
     expect(getTtsMaxSpeed()).toBe(1.5);
@@ -223,9 +245,9 @@ describe("remix-config", () => {
     }
   });
 
-  it("defaults TTS timing mode to sequential", () => {
+  it("defaults TTS timing mode to hybrid", () => {
     delete process.env.REMIX_TTS_TIMING_MODE;
-    expect(getTtsTimingMode()).toBe("sequential");
+    expect(getTtsTimingMode()).toBe("hybrid");
   });
 
   it("honors REMIX_TTS_TIMING_MODE=hybrid", () => {
@@ -238,9 +260,14 @@ describe("remix-config", () => {
     expect(getTtsTimingMode()).toBe("strict");
   });
 
-  it("falls back to sequential for unknown timing mode", () => {
-    process.env.REMIX_TTS_TIMING_MODE = "elastic";
+  it("honors REMIX_TTS_TIMING_MODE=sequential", () => {
+    process.env.REMIX_TTS_TIMING_MODE = "sequential";
     expect(getTtsTimingMode()).toBe("sequential");
+  });
+
+  it("falls back to hybrid for unknown timing mode", () => {
+    process.env.REMIX_TTS_TIMING_MODE = "elastic";
+    expect(getTtsTimingMode()).toBe("hybrid");
   });
 
   it("defaults TTS mode to fake", () => {
